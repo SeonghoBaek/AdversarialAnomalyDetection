@@ -31,9 +31,9 @@ def get_sequence_batch(X, seq_length, batch_size):
         if a[i] < seq_length - 1:
             s = np.random.normal(0.0, 0.1, [seq_length, len(X[0])])
             seq.append(s)
-    else:
-        s = np.arange(a[i]-seq_length, a[i])
-        seq.append(X[s])
+        else:
+            s = np.arange(a[i]-seq_length, a[i])
+            seq.append(X[s])
 
     seq = np.array(seq)
 
