@@ -170,13 +170,13 @@ def discriminator(x, activation='swish', scope='discriminator', reuse=False, bn_
 
 
 def batch_norm(x, b_train, scope, reuse=False):
-"""
-Args:
-x: Tensor, 2D input maps
-b_train: Boolean, train/test mode
-Return:
-normed: batch-normalized maps
-"""
+	"""
+	Args:
+	x: Tensor, 2D input maps
+	b_train: Boolean, train/test mode
+	Return:
+	normed: batch-normalized maps
+	"""
 	with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
 		n_out = x.get_shape().as_list()[-1]
 
