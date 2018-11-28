@@ -6,7 +6,7 @@
 # ==============================================================================
 
 import tensorflow as tf
-from sae import StackedAutoEncoder
+from stackedautoencoder import StackedAutoEncoder
 import numpy as np
 import util
 
