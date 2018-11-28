@@ -1,6 +1,9 @@
 # AdversarialAnomalyDetection
 Unsupervised Adversarial Anomaly Detection
 
+SEADNet
+- Sequence Embedding, Anomaly Detection Network
+
 Stacked LSTM + Deep Auto Encoder + Adversarial Discriminator + Latent Reencoder
 
 Input
