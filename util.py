@@ -99,10 +99,3 @@ def generate_samples(dim, num_inlier, num_outlier, normalize=True):
         outlier = np.array(sample_outlier).transpose()
 
     return inlier, outlier
-
-
-def generate_sequence_samples(dim, num_inlier, num_outlier):
-    inlier = np.random.normal(0.0, 0.1, [num_inlier, dim])
-    outlier = np.random.normal(3.0, 0.1, [num_outlier, dim])
-
-    return inlier, outlier
