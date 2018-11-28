@@ -442,5 +442,5 @@ def train(pretrain=True, b_test=False):
 
 
 if __name__ == '__main__':
-	#train(pretrain=False, b_test=False)
-	train(pretrain=False, b_test=True)
+	train(pretrain=True, b_test=False)
+	# train(pretrain=False, b_test=True)
