@@ -30,4 +30,4 @@ Test
 - Training only normal samples
 - Discriminate anomaly samples at test time
 
-Always welcom a nice idea: Code or Text what ever!
+Always welcome a nice idea: Code or Text what ever!
