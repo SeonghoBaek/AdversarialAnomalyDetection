@@ -79,22 +79,22 @@ def generate_samples(dim, num_inlier, num_outlier, normalize=True):
     if normalize:
         inlier = np.transpose(inlier)
 
-    for values in inlier:
-        values = sigmoid_normalize(values)
-        sample_inlier.append(values)
+        for values in inlier:
+            values = sigmoid_normalize(values)
+            sample_inlier.append(values)
 
-        inlier = np.array(sample_inlier).transpose()
+            inlier = np.array(sample_inlier).transpose()
 
-        outlier = np.random.normal(1.0, 1.0, [num_outlier, dim])
+    outlier = np.random.normal(1.0, 1.0, [num_outlier, dim])
 
-        sample_outlier = []
+    sample_outlier = []
 
     if normalize:
         outlier = np.transpose(outlier)
 
-    for values in outlier:
-        values = sigmoid_normalize(values)
-        sample_outlier.append(values)
+        for values in outlier:
+            values = sigmoid_normalize(values)
+            sample_outlier.append(values)
 
         outlier = np.array(sample_outlier).transpose()
 
