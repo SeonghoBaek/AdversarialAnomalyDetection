@@ -290,6 +290,7 @@ def discriminator(x, activation='swish', scope='discriminator', reuse=False, bn_
 
         input = tf.reshape(x, shape=[-1, 10, 10, 30])
 
+        '''
         dc_conv1 = conv(input, scope='dc_conv1', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
         dc_conv2 = conv(dc_conv1, scope='dc_conv2', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
         dc_conv_fused1 = tf.concat([dc_conv1, dc_conv2], axis=3)
@@ -302,8 +303,38 @@ def discriminator(x, activation='swish', scope='discriminator', reuse=False, bn_
         dc_conv6 = conv(dc_conv5, scope='dc_conv6', filter_dims=[1, 1, 16], stride_dims=[1, 1], non_linear_fn=act_func)
 
         dc_output = fc(dc_conv6, scope='dc_fc', out_dim=1, non_linear_fn=None)
+        dc_final_layer = dc_conv6
+    
+        return dc_final_layer, dc_output, tf.sigmoid(dc_output)
+        '''
+        dc_conv1 = conv(x, scope='dc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        dc_conv2 = conv(dc_conv1, scope='dc_conv2', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        dc_conv3 = conv(dc_conv2, scope='dc_conv3', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
 
-        return dc_conv6, dc_output, tf.sigmoid(dc_output)
+        dc_conv_fused1 = tf.concat([dc_conv2, dc_conv3], axis=3)
+        dc_conv_fused1 = batch_norm_conv(dc_conv_fused1, b_train=bn_phaze, scope='dc_conv_fused1_bn')
+
+        dc_conv4 = conv(dc_conv_fused1, scope='dc_conv4', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        dc_conv5 = conv(dc_conv4, scope='dc_conv5', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        dc_conv6 = conv(dc_conv5, scope='dc_conv6', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+
+        dc_conv_fused2 = tf.concat([dc_conv2, dc_conv3, dc_conv4, dc_conv5, dc_conv6], axis=3)
+        dc_conv_fused2 = batch_norm_conv(dc_conv_fused2, b_train=bn_phaze, scope='dc_conv_fused2_bn')
+
+        dc_conv7 = conv(dc_conv_fused2, scope='dc_conv7', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        dc_conv8 = conv(dc_conv7, scope='dc_conv8', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func)
+        dc_conv9 = conv(dc_conv8, scope='dc_conv9', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func)
+
+        dc_conv_fused3 = tf.concat([dc_conv2, dc_conv3, dc_conv4, dc_conv5, dc_conv6, dc_conv7, dc_conv8, dc_conv9], axis=3)
+        dc_conv_fused3 = batch_norm_conv(dc_conv_fused3, b_train=bn_phaze, scope='dc_conv_fused3_bn')
+
+        dc_conv10 = conv(dc_conv_fused3, scope='dc_conv10', filter_dims=[1, 1, 32], stride_dims=[1, 1], non_linear_fn=act_func)
+
+        dc_output = fc(dc_conv10, scope='dc_fc', out_dim=1, non_linear_fn=None)
+
+        dc_final_layer = dc_conv10
+
+        return dc_final_layer, dc_output, tf.sigmoid(dc_output)
 
 
 def batch_norm_conv(x, b_train, scope, reuse=False):
