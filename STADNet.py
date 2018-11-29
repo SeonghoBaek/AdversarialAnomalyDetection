@@ -609,7 +609,7 @@ def train(b_test=False):
                 d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
                                                   feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: False})
 
-                score = 10 * (f_loss + r_loss)
+                score = 10 * r_loss
                 print('outlier Anomaly Score:', score, ', d loss:', d_loss, ', r loss:', r_loss, ', f loss:', f_loss)
 
                 batch_x, batch_seq = util.get_sequence_batch(inlier_sample, width, batch_size)
@@ -620,7 +620,7 @@ def train(b_test=False):
                 d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
                                                   feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: False})
 
-                score = 10 * (f_loss + r_loss)
+                score = 10 * r_loss
 
                 print('inlier Anomaly Score:', score, ', d loss:', d_loss , ', r loss:', r_loss, ', f loss:', f_loss)
                 print()
