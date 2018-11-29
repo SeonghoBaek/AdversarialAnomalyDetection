@@ -1,4 +1,4 @@
-# AdversarialAnomalyDetection
+# Adversarial Anomaly Detection
 Unsupervised Adversarial Anomaly Detection
 
 # SEADNet
