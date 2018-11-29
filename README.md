@@ -4,7 +4,7 @@ Unsupervised Adversarial Anomaly Detection
 # SEADNet
 - Sequence Embedding, Anomaly Detection Network
 
-Note) I assumed you have 2 GPU. If not, change gpu setting code.
+Note) I assumed you have 2 GPUs. If not, change gpu setting code.
 
 Stacked LSTM + Deep Auto Encoder + Adversarial Discriminator + Latent Reencoder
 
@@ -36,7 +36,7 @@ Test
 - Spatio-Temporal, Anomaly Detection Network
 
 
-Note) I assumed you have 2 GPU. If not, change gpu setting code.
+Note) I assumed you have 2 GPUs. If not, change gpu setting code.
 
 
 1D/2D Convolution + Adversarial Discriminator
