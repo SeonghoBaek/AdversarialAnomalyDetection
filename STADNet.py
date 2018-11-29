@@ -15,18 +15,17 @@ batch_size = 128
 width = 20
 height = input_feature_dim
 
-g_encoder_z_local_dim = 128
+g_encoder_z_local_dim = 64
 g_encoder_z_dim = g_encoder_z_local_dim
 g_encoder_input_dim = input_feature_dim
 g_encoder_layer1_dim = 128
 g_encoder_layer2_dim = 64
 
-g_decoder_output_dim = input_feature_dim
-g_decoder_layer2_dim = 96
-g_decoder_layer1_dim = 128
+lstm_hidden_size_layer1 = 128
+lstm_hidden_size_layer2 = 64
+lstm_sequence_length = 20
 
-d_layer_1_dim = 128
-d_layer_2_dim = 64
+g_decoder_output_dim = input_feature_dim
 
 
 def dense(x, n1, n2, scope='dense', initial_value=None):
@@ -195,6 +194,25 @@ def fc(input, scope, out_dim, non_linear_fn=None):
         return activation
 
 
+def lstm_network(input, scope='lstm_network'):
+    with tf.variable_scope(scope):
+        lstm_cell1 = tf.contrib.rnn.BasicLSTMCell(lstm_hidden_size_layer1, forget_bias=1.0)
+        lstm_cell2 = tf.contrib.rnn.BasicLSTMCell(lstm_hidden_size_layer2, forget_bias=1.0)
+
+        lstm_cells = tf.contrib.rnn.MultiRNNCell(cells=[lstm_cell1, lstm_cell2], state_is_tuple=True)
+
+        # initial_state = lstm_cells.zero_state(batch_size,  tf.float32)
+
+        _, states = tf.nn.dynamic_rnn(lstm_cells, input, dtype=tf.float32, initial_state=None)
+
+        z_sequence_output = states[1].h
+        # print(z_sequence_output.get_shape())
+        #states_concat = tf.concat([states[0].h, states[1].h], 1)
+        #z_sequence_output = dense(states_concat, lstm_linear_transform_input_dim, lstm_z_sequence_dim, scope='linear_transform')
+
+    return z_sequence_output
+
+
 def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze=False):
     with tf.variable_scope(scope):
         if activation == 'swish':
@@ -257,23 +275,6 @@ def g_decoder_network(x, activation='swish', scope='g_decoder_network', bn_phaze
         return g_dec_output
 
 
-def r_encoder_network(x, activation='swish', scope='r_encoder_network', bn_phaze=False):
-    with tf.variable_scope(scope):
-        if activation == 'swish':
-            act_func = util.swish
-        elif activation == 'relu':
-            act_func = tf.nn.relu
-        else:
-            act_func = tf.nn.sigmoid
-
-        r_enc_dense1 = act_func(dense(x, g_encoder_input_dim, g_decoder_layer1_dim, scope='r_enc_dense_1'))
-        r_enc_dense1 = batch_norm(r_enc_dense1, bn_phaze, scope='r_enc_dense1_bn')
-        r_enc_dense2 = act_func(dense(r_enc_dense1, g_decoder_layer1_dim, g_decoder_layer2_dim, scope='r_enc_dense_2'))
-        r_enc_dense2 = batch_norm(r_enc_dense2, bn_phaze, scope='r_enc_dense2_bn')
-        r_enc_output = dense(r_enc_dense2, g_decoder_layer2_dim, g_encoder_z_dim, scope='r_enc_output')
-        return r_enc_output
-
-
 def discriminator(x, activation='swish', scope='discriminator', reuse=False, bn_phaze=False):
     with tf.variable_scope(scope):
         if reuse:
@@ -288,9 +289,8 @@ def discriminator(x, activation='swish', scope='discriminator', reuse=False, bn_
         else:
             act_func = tf.nn.sigmoid
 
-        input = tf.reshape(x, shape=[-1, 10, 10, 30])
-
         '''
+        input = tf.reshape(x, shape=[-1, 10, 10, 30])
         dc_conv1 = conv(input, scope='dc_conv1', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
         dc_conv2 = conv(dc_conv1, scope='dc_conv2', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
         dc_conv_fused1 = tf.concat([dc_conv1, dc_conv2], axis=3)
@@ -466,17 +466,26 @@ def train(b_test=False):
     device = {0: '/cpu:0', 1: '/gpu:0', 2: '/gpu:1'}
 
     # Generate test sample
-    inlier_sample, outlier_sample = util.generate_samples(150, 100000, 100)
+    inlier_sample, outlier_sample = util.generate_samples(150, 100000, 1000)
 
     bn_train = tf.placeholder(tf.bool)
 
     # H: 150, W: 20, C: 1
     g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, height, width, 1])
 
+    lstm_input = tf.placeholder(dtype=tf.float32, shape=[None, lstm_sequence_length, input_feature_dim])
+    # Z seq: LSTM sequence latent output
+    z_seq = lstm_network(lstm_input, scope='LSTM')
+    # z_seq = np.random.uniform(-1., 1., size=[batch_size, 32])
+
     with tf.device(device[2]):
         # Z enc: Encoder latent output
-        z_enc = g_encoder_network(g_encoder_input, activation='swish', scope='G_Encoder', bn_phaze=bn_train)
-        #z_enc = tf.random_uniform(shape=[batch_size, 64], minval=0.0, maxval=1.0, dtype=tf.float32)
+        z_local = g_encoder_network(g_encoder_input, activation='swish', scope='G_Encoder', bn_phaze=bn_train)
+
+    with tf.device(device[0]):
+        z_enc = tf.concat([z_seq, z_local], 1)
+
+    with tf.device(device[2]):
         # Reconstructed output
         decoder_output = g_decoder_network(z_enc, activation='swish', scope='G_Decoder', bn_phaze=bn_train)
 
@@ -492,8 +501,9 @@ def train(b_test=False):
     g_encoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='G_Encoder')
     # print('encoder vars:', g_encoder_var)
     g_decoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='G_Decoder')
+    g_lstm_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='LSTM')
 
-    generator_vars = g_encoder_var + g_decoder_var
+    generator_vars = g_encoder_var + g_decoder_var + g_lstm_var
 
     # Joint loss term
     residual_loss = get_residual_loss(decoder_output, g_encoder_input, type='l2', gamma=1.0)
@@ -505,7 +515,7 @@ def train(b_test=False):
     gan_g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=d_fake, labels=tf.ones_like(d_fake)))
     alpha = 1.0
     beta = 1.0
-    gamma = 1.0
+    gamma = 0.5
     generator_loss = alpha * residual_loss + beta * feature_matching_loss + gamma * gan_g_loss
     discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='ce', gamma=1.0)
     #discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='wgan', gamma=1.0)
@@ -514,9 +524,11 @@ def train(b_test=False):
     d_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in d_var]
 
     # training operation
-    d_optimizer = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(discriminator_loss, var_list=d_var)
-    #d_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(discriminator_loss, var_list=d_var)
-    g_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(generator_loss, var_list=generator_vars)
+    #d_optimizer = tf.train.RMSPropOptimizer(learning_rate=1e-4).minimize(discriminator_loss, var_list=d_var)
+    d_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(discriminator_loss, var_list=d_var)
+    g_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(residual_loss, var_list=generator_vars)
+    f_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(feature_matching_loss, var_list=generator_vars)
+    gan_g_optimzier = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(gan_g_loss, var_list=generator_vars)
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -529,7 +541,8 @@ def train(b_test=False):
 
         if b_test == False:
             num_itr = int(len(inlier_sample)/batch_size)
-            num_epoch = 2
+            num_itr = 200
+            num_epoch = 1
             early_stop = False
             f_loss_list = []
             b_wgan = False
@@ -549,7 +562,7 @@ def train(b_test=False):
                         # wgan
                         sess.run(
                             [d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
-                            feed_dict={g_encoder_input: cnn_batch_x, bn_train: True})
+                            feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
 
                         batch_x, batch_seq = util.get_sequence_batch(inlier_sample, width, batch_size)
 
@@ -557,11 +570,10 @@ def train(b_test=False):
                         cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
                         _, _, d_loss, l_real, l_fake = sess.run([d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
-                                               feed_dict={g_encoder_input: cnn_batch_x, bn_train: True})
+                                               feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
                     else:
-                        # gan cross entropy. 2(discriminator):1(generator) training.
                         sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
-                                                             feed_dict={g_encoder_input: cnn_batch_x, bn_train: True})
+                                                             feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
 
                         batch_x, batch_seq = util.get_sequence_batch(inlier_sample, width, batch_size)
 
@@ -569,10 +581,16 @@ def train(b_test=False):
                         cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
                         _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
-                                                             feed_dict={g_encoder_input: cnn_batch_x, bn_train: True})
+                                                             feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
 
-                    _, r_loss, f_loss = sess.run([g_optimizer, residual_loss, feature_matching_loss],
-                                                 feed_dict={g_encoder_input: cnn_batch_x, bn_train: True})
+                    _, r_loss = sess.run([g_optimizer, residual_loss],
+                                                 feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
+
+                    _, f_loss = sess.run([f_optimizer, feature_matching_loss],
+                                                 feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,bn_train: True})
+
+                    sess.run([gan_g_optimzier],
+                             feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
 
                     if (itr + 1) % 10 == 0:
                         print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
@@ -584,33 +602,32 @@ def train(b_test=False):
         else:
             for i in range(100):
                 batch_x, batch_seq = util.get_sequence_batch(outlier_sample, width, batch_size)
+
                 cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
                 cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
-                # batch_x = np.ones_like(batch_x)
-
                 d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
-                                                  feed_dict={g_encoder_input: cnn_batch_x, bn_train: False})
-                alpha = 1.0
-                beta = 100
+                                                  feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: False})
 
-                score = (1.0 - d_loss) * 10 + alpha * r_loss
+                score = 10 * (f_loss + r_loss)
                 print('outlier Anomaly Score:', score, ', d loss:', d_loss, ', r loss:', r_loss, ', f loss:', f_loss)
 
                 batch_x, batch_seq = util.get_sequence_batch(inlier_sample, width, batch_size)
+
                 cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
                 cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
                 d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
-                                                  feed_dict={g_encoder_input: cnn_batch_x, bn_train: False})
+                                                  feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: False})
 
-                score = (1.0 - d_loss) * 10 + alpha * r_loss
+                score = 10 * (f_loss + r_loss)
 
                 print('inlier Anomaly Score:', score, ', d loss:', d_loss , ', r loss:', r_loss, ', f loss:', f_loss)
+                print()
 
 
 if __name__ == '__main__':
-    b_test = False
+    b_test = True
 
     if b_test:
         batch_size = 1
