@@ -452,7 +452,9 @@ def train(pretrain=True, b_test=False):
     # g_res_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(residual_loss, var_list=generator_vars)
     # g_feature_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(feature_matching_loss,
     #                                                                              var_list=generator_vars)
-    g_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(generator_loss, var_list=generator_vars)
+    g_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(residual_loss, var_list=generator_vars)
+    f_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(feature_matching_loss, var_list=generator_vars)
+    gan_g_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(gan_g_loss, var_list=generator_vars)
     r_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(conceptual_loss, var_list=[conceptual_vars, generator_vars])
 
     with tf.Session() as sess:
@@ -466,7 +468,7 @@ def train(pretrain=True, b_test=False):
 
         if b_test == False:
             num_itr = int(len(inlier_sample)/batch_size)
-            num_epoch = 20
+            num_epoch = 2
             early_stop = False
             f_loss_list = []
 
@@ -489,8 +491,14 @@ def train(pretrain=True, b_test=False):
                                                          feed_dict={g_encoder_input: batch_x,
                                                                     lstm_input: batch_seq, bn_train: True})
 
-                    _, r_loss, f_loss = sess.run([g_optimizer, residual_loss, feature_matching_loss],
-                                                 feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+                    _, r_loss = sess.run([g_optimizer, residual_loss],
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+
+                    _, f_loss = sess.run([f_optimizer, feature_matching_loss],
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+
+                    sess.run([gan_g_optimizer],
+                             feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
                     # Test.
                     #_, r_loss = sess.run([g_optimizer, residual_loss],
@@ -545,11 +553,9 @@ def train(pretrain=True, b_test=False):
                 d_loss, r_loss, f_loss, c_loss = sess.run([d_fake_output, residual_loss_l1, feature_matching_loss, conceptual_loss_l1],
                                                   feed_dict={g_encoder_input: batch_x,
                                                              lstm_input: batch_seq, bn_train: False})
-                alpha = 1.0
-                beta = 100
 
-                score = (1.0 - d_loss) + alpha * r_loss + beta * c_loss
-                print('outlier Anomaly Score:', score, ', d loss:', d_loss, ', r loss:', r_loss, ', c loss:', c_loss)
+                score = 10 * (r_loss + c_loss)
+                print('outlier Anomaly Score:', score, ', f loss:', f_loss, ', r loss:', r_loss, ', c loss:', c_loss)
 
                 batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, 1)
 
@@ -557,11 +563,12 @@ def train(pretrain=True, b_test=False):
                                                   feed_dict={g_encoder_input: batch_x,
                                                              lstm_input: batch_seq, bn_train: False})
 
-                score = (1.0 - d_loss) + alpha * r_loss + beta * c_loss
+                score = 10 * (r_loss + c_loss)
 
-                print('inlier Anomaly Score:', score, ', d loss:', d_loss , ', r loss:', r_loss, ', c loss:', c_loss)
+                print('inlier Anomaly Score:', score, ', f loss:', f_loss , ', r loss:', r_loss, ', c loss:', c_loss)
+                print()
 
 
 if __name__ == '__main__':
-    train(pretrain=False, b_test=False)
-    #train(pretrain=False, b_test=True)
+    #train(pretrain=False, b_test=False)
+    train(pretrain=False, b_test=True)
