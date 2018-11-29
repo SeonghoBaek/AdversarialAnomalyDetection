@@ -35,6 +35,10 @@ Test
 # STADNet
 - Spatio-Temporal, Anomaly Detection Network
 
+
+Note) I assumed you have 2 GPU. If not, change gpu setting code.
+
+
 1D/2D Convolution + Adversarial Discriminator
 
 Input
