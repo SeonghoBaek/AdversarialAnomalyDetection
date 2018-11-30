@@ -624,8 +624,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--train', help='Training mode', action='store_true')
     parser.add_argument('--test', help='Test mode', action='store_true')
-    parser.add_argument('--epoch', help='epoch count', default=1)
-    parser.add_argument('--batchsize', help='batch size', default=128)
+    parser.add_argument('--epoch', type=int, help='epoch count', default=1)
+    parser.add_argument('--batchsize', type=int, help='batch size', default=128)
     parser.add_argument('--noise', help='Add random noise', action='store_true')
 
     args = parser.parse_args()
