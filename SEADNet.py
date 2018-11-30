@@ -9,9 +9,9 @@ import tensorflow as tf
 from sae import StackedAutoEncoder
 import numpy as np
 import util
+import argparse
 
 input_feature_dim = 150
-batch_size = 128
 
 lstm_sequence_length = 20
 lstm_hidden_size_layer1 = 128
@@ -468,7 +468,6 @@ def train(pretrain=True, b_test=False):
 
         if b_test == False:
             num_itr = int(len(inlier_sample)/batch_size)
-            num_epoch = 2
             early_stop = False
             f_loss_list = []
 
@@ -570,5 +569,22 @@ def train(pretrain=True, b_test=False):
 
 
 if __name__ == '__main__':
-    #train(pretrain=False, b_test=False)
-    train(pretrain=False, b_test=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train', help='Training mode', action='store_true')
+    parser.add_argument('--test', help='Test mode', action='store_true')
+    parser.add_argument('--sae', help='Pretrain encoder', action='store_true')
+    parser.add_argument('--epoch', help='epoch count', default=1)
+    parser.add_argument('--batchsize', help='batch size', default=128)
+
+    args = parser.parse_args()
+
+    num_epoch = args.epoch
+    batch_size = args.batchsize
+
+    if args.train:
+        train(pretrain=args.sae, b_test=False)
+    elif args.test:
+        train(pretrain=False, b_test=True)
+    else:
+        print('Please set options. --train or -- test, for training with sae use --train --sae')
+
