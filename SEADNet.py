@@ -94,7 +94,8 @@ def dense(x, n1, n2, scope='dense', initial_value=None, use_bias=True):
         return out
 
 
-def g_encoder_network(x, pretrained=False, weights=None, biases=None, activation='swish', scope='g_encoder_network', bn_phaze=False):
+def g_encoder_network(x, pretrained=False, weights=None, biases=None, activation='swish', scope='g_encoder_network',
+                      bn_phaze=False, b_noise=False):
     with tf.variable_scope(scope):
         if activation == 'swish':
             act_func = util.swish
@@ -102,6 +103,10 @@ def g_encoder_network(x, pretrained=False, weights=None, biases=None, activation
             act_func = tf.nn.relu
         else:
             act_func = tf.nn.sigmoid
+
+        if use_random_noise:
+            x = tf.cond(b_noise, lambda: util.add_gaussian_noise(x, 0.0, 0.1),
+                        lambda: util.add_gaussian_noise(x, 0.0, -1.0))
 
         if pretrained:
             g_enc_dense_1 = act_func(dense(x, g_encoder_input_dim, g_encoder_layer1_dim, scope='g_enc_dense_1',
@@ -369,6 +374,10 @@ def train(pretrain=True, b_test=False):
     # Generate test sample
     inlier_sample, outlier_sample = util.generate_samples(150, 100000, 100)
 
+    add_noise = tf.placeholder(tf.bool)
+    bn_train = tf.placeholder(tf.bool)
+    g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, input_feature_dim])
+
     with tf.device(device[2]):
         # Pretraining Stacked Auto Encoder
         if pretrain:
@@ -377,14 +386,10 @@ def train(pretrain=True, b_test=False):
             stacked_auto_encoder_weights = None
             stacked_auto_encoder_biases = None
 
-        bn_train = tf.placeholder(tf.bool)
-
-        g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, input_feature_dim])
-
         # Z local: Encoder latent output
         z_local = g_encoder_network(g_encoder_input, pretrained=pretrain,
                                     weights=stacked_auto_encoder_weights, biases=stacked_auto_encoder_biases,
-                                    activation='swish', scope='G_Encoder', bn_phaze=bn_train)
+                                    activation='swish', scope='G_Encoder', bn_phaze=bn_train, b_noise=add_noise)
 
     lstm_input = tf.placeholder(dtype=tf.float32, shape=[None, lstm_sequence_length, input_feature_dim])
     # Z seq: LSTM sequence latent output
@@ -413,7 +418,7 @@ def train(pretrain=True, b_test=False):
     # Trainable variable lists
     with tf.device(device[2]):
         d_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='Discriminator')
-        print('encoder vars:', d_var)
+        #print('encoder vars:', d_var)
 
     r_encoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='R_Encoder')
     g_encoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='G_Encoder')
@@ -468,6 +473,7 @@ def train(pretrain=True, b_test=False):
 
         if b_test == False:
             num_itr = int(len(inlier_sample)/batch_size)
+
             early_stop = False
             f_loss_list = []
 
@@ -477,7 +483,7 @@ def train(pretrain=True, b_test=False):
 
                     # wgan
                     _, _, d_loss = sess.run([d_optimizer, d_weight_clip, discriminator_loss],
-                                          feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+                                          feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     # gan cross entropy. 2(discriminator):1(generator) training.
                     #sess.run([d_optimizer, discriminator_loss],
@@ -488,23 +494,23 @@ def train(pretrain=True, b_test=False):
 
                     _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
                                                          feed_dict={g_encoder_input: batch_x,
-                                                                    lstm_input: batch_seq, bn_train: True})
+                                                                    lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     _, r_loss = sess.run([g_optimizer, residual_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     _, f_loss = sess.run([f_optimizer, feature_matching_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     sess.run([gan_g_optimizer],
-                             feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+                             feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     # Test.
                     #_, r_loss = sess.run([g_optimizer, residual_loss],
                     #                     feed_dict={d_input: batch_x, g_encoder_input: batch_x, lstm_input: batch_seq})
 
                     _, c_loss = sess.run([r_optimizer, conceptual_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     if (itr + 1) % 200 == 0:
                         print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
@@ -513,6 +519,10 @@ def train(pretrain=True, b_test=False):
                         if len(f_loss_list) > 10:
                             if sum(f_loss_list[-5:])/5 < 0.002:
                                 early_stop = False
+                        try:
+                            saver.save(sess, './model/SEADNet.ckpt')
+                        except:
+                            print('Save failed')
 
                     if early_stop:
                         break
@@ -523,7 +533,7 @@ def train(pretrain=True, b_test=False):
                 batch_x, batch_seq = util.get_sequence_batch(outlier_sample, lstm_sequence_length, 1)
 
                 d_loss, r_loss, f_loss, c_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss, conceptual_loss],
-                                                  feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: False})
+                                                  feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: False, add_noise: True})
 
                 alpha = 1.0
                 beta = 100
@@ -534,12 +544,12 @@ def train(pretrain=True, b_test=False):
 
                 d_loss, r_loss, f_loss, c_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss, conceptual_loss],
                                                   feed_dict={g_encoder_input: batch_x,
-                                                             lstm_input: batch_seq, bn_train: False})
+                                                             lstm_input: batch_seq, bn_train: False, add_noise: True})
                 score = (1.0 - d_loss) + alpha * r_loss + beta * c_loss
                 print('inlier Anomaly Score:', score, ', d loss:', d_loss, ', r loss:', r_loss, ', c loss:', c_loss)
 
             try:
-                saver.save(sess, './model/SE_ADNet_L.ckpt')
+                saver.save(sess, './model/SEADNet.ckpt')
             except:
                 print('Save failed')
         else:
@@ -551,7 +561,7 @@ def train(pretrain=True, b_test=False):
 
                 d_loss, r_loss, f_loss, c_loss = sess.run([d_fake_output, residual_loss_l1, feature_matching_loss, conceptual_loss_l1],
                                                   feed_dict={g_encoder_input: batch_x,
-                                                             lstm_input: batch_seq, bn_train: False})
+                                                             lstm_input: batch_seq, bn_train: False, add_noise: True})
 
                 score = 10 * (r_loss + c_loss)
                 print('outlier Anomaly Score:', score, ', f loss:', f_loss, ', r loss:', r_loss, ', c loss:', c_loss)
@@ -560,7 +570,7 @@ def train(pretrain=True, b_test=False):
 
                 d_loss, r_loss, f_loss, c_loss = sess.run([d_fake_output, residual_loss_l1, feature_matching_loss, conceptual_loss_l1],
                                                   feed_dict={g_encoder_input: batch_x,
-                                                             lstm_input: batch_seq, bn_train: False})
+                                                             lstm_input: batch_seq, bn_train: False, add_noise: True})
 
                 score = 10 * (r_loss + c_loss)
 
@@ -572,14 +582,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--train', help='Training mode', action='store_true')
     parser.add_argument('--test', help='Test mode', action='store_true')
+    parser.add_argument('--noise', help='Add random noise', action='store_true')
     parser.add_argument('--sae', help='Pretrain encoder', action='store_true')
-    parser.add_argument('--epoch', help='epoch count', default=1)
-    parser.add_argument('--batchsize', help='batch size', default=128)
+    parser.add_argument('--epoch', type=int, help='epoch count', default=1)
+    parser.add_argument('--batchsize', type=int, help='batch size', default=128)
 
     args = parser.parse_args()
 
     num_epoch = args.epoch
     batch_size = args.batchsize
+    use_random_noise = args.noise
 
     if args.train:
         train(pretrain=args.sae, b_test=False)
@@ -587,4 +599,3 @@ if __name__ == '__main__':
         train(pretrain=False, b_test=True)
     else:
         print('Please set options. --train or -- test, for training with sae use --train --sae')
-
