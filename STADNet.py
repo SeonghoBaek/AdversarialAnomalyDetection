@@ -456,7 +456,7 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
         d_loss_real = tf.reduce_mean(real)
         d_loss_fake = tf.reduce_mean(fake)
 
-        return gamma * (d_loss_real - d_loss_fake), d_loss_real, d_loss_fake
+        return gamma * (d_loss_real - d_loss_fake) + 1.0, d_loss_real, d_loss_fake
     elif type == 'ce':
         # cross entropy
         d_loss_real = tf.reduce_mean(
@@ -502,6 +502,7 @@ def train(b_test=False):
                                                         reuse=True, bn_phaze=bn_train)
 
     d_fake_output = tf.squeeze(d_fake_output)
+    d_real_output = tf.squeeze(d_real_output)
 
     # Trainable variable lists
     d_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='Discriminator')
@@ -518,14 +519,14 @@ def train(b_test=False):
     # Cross Entropy
     # gan_g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=d_fake, labels=tf.ones_like(d_fake)))
     # WGAN
-    #gan_g_loss = tf.reduce_mean(d_fake)
-    gan_g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=d_fake, labels=tf.ones_like(d_fake)))
+    gan_g_loss = tf.reduce_mean(d_fake) + 1.0
+    #gan_g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=d_fake, labels=tf.ones_like(d_fake)))
     alpha = 1.0
     beta = 1.0
     gamma = 0.5
     generator_loss = alpha * residual_loss + beta * feature_matching_loss + gamma * gan_g_loss
-    discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='ce', gamma=1.0)
-    #discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='wgan', gamma=1.0)
+    #discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='ce', gamma=1.0)
+    discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='wgan', gamma=1.0)
 
     # For wgan loss.
     d_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in d_var]
@@ -542,13 +543,13 @@ def train(b_test=False):
 
         try:
             saver = tf.train.Saver()
-            saver.restore(sess, './model/STADNet.ckpt')
+            saver.restore(sess, './model/stadnet/STADNet.ckpt')
         except:
             print('Restore failed')
 
         if b_test == False:
             num_itr = int(len(inlier_sample)/batch_size)
-            b_wgan = False
+            b_wgan = True
 
             for epoch in range(num_epoch):
                 for itr in range(num_itr):
@@ -586,17 +587,18 @@ def train(b_test=False):
                         print('epoch: {0}, itr: {1}, d_loss: {2}, r_loss: {3}, f_loss: {4}'.format(epoch, itr, d_loss, r_loss, f_loss))
 
                         try:
-                            saver.save(sess, './model/STADNet.ckpt')
+                            saver.save(sess, './model/stadnet/STADNet.ckpt')
                         except:
                             print('Save failed')
         else:
             for i in range(100):
+                outlier_sample = outlier_sample + np.random.normal(loc=2.0, scale=0.1, size=outlier_sample.shape)
                 batch_x, batch_seq = util.get_sequence_batch(outlier_sample, width, batch_size)
 
                 cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
                 cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
-                d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
+                d_loss, r_loss, f_loss = sess.run([d_real_output, residual_loss, feature_matching_loss],
                                                   feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
                                                              bn_train: False, add_noise: True})
 
@@ -608,7 +610,7 @@ def train(b_test=False):
                 cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
                 cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
-                d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
+                d_loss, r_loss, f_loss = sess.run([d_real_output, residual_loss, feature_matching_loss],
                                                   feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
                                                              bn_train: False, add_noise: True})
 
