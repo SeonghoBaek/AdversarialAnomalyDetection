@@ -6,12 +6,12 @@
 # ==============================================================================
 
 import tensorflow as tf
-from sae import StackedAutoEncoder
 import numpy as np
 import util
 import argparse
 
 input_feature_dim = 150
+
 width = 20
 height = input_feature_dim
 
@@ -213,7 +213,7 @@ def lstm_network(input, scope='lstm_network'):
     return z_sequence_output
 
 
-def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze=False):
+def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze=False, b_noise=False):
     with tf.variable_scope(scope):
         if activation == 'swish':
             act_func = util.swish
@@ -221,6 +221,9 @@ def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze
             act_func = tf.nn.relu
         else:
             act_func = tf.nn.sigmoid
+
+        if use_random_noise:
+            x = tf.cond(b_noise, lambda: util.add_gaussian_noise(x, 0.0, 0.1), lambda: util.add_gaussian_noise(x, 0.0, -1.0))
 
         g_enc_conv1 = conv(x, scope='g_enc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
 
@@ -275,7 +278,7 @@ def g_decoder_network(x, activation='swish', scope='g_decoder_network', bn_phaze
         return g_dec_output
 
 
-def discriminator(x, activation='swish', scope='discriminator', reuse=False, bn_phaze=False):
+def discriminator(input_data, activation='swish', scope='discriminator', reuse=False, bn_phaze=False):
     with tf.variable_scope(scope):
         if reuse:
             tf.get_variable_scope().reuse_variables()
@@ -307,7 +310,8 @@ def discriminator(x, activation='swish', scope='discriminator', reuse=False, bn_
     
         return dc_final_layer, dc_output, tf.sigmoid(dc_output)
         '''
-        dc_conv1 = conv(x, scope='dc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+
+        dc_conv1 = conv(input_data, scope='dc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
         dc_conv2 = conv(dc_conv1, scope='dc_conv2', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
         dc_conv3 = conv(dc_conv2, scope='dc_conv3', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
 
@@ -469,6 +473,7 @@ def train(b_test=False):
     inlier_sample, outlier_sample = util.generate_samples(150, 100000, 1000)
 
     bn_train = tf.placeholder(tf.bool)
+    add_noise = tf.placeholder(tf.bool)
 
     # H: 150, W: 20, C: 1
     g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, height, width, 1])
@@ -480,7 +485,7 @@ def train(b_test=False):
 
     with tf.device(device[2]):
         # Z enc: Encoder latent output
-        z_local = g_encoder_network(g_encoder_input, activation='swish', scope='G_Encoder', bn_phaze=bn_train)
+        z_local = g_encoder_network(g_encoder_input, activation='swish', scope='G_Encoder', bn_phaze=bn_train, b_noise=add_noise)
 
     with tf.device(device[0]):
         z_enc = tf.concat([z_seq, z_local], 1)
@@ -491,8 +496,10 @@ def train(b_test=False):
 
     # Discriminator output
     #   - feature real/fake: Feature matching approach. Returns last feature layer
-    feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator', bn_phaze=bn_train)
-    feature_fake, d_fake, d_fake_output = discriminator(decoder_output, activation='swish', scope='Discriminator', reuse=True, bn_phaze=bn_train)
+    feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator',
+                                                        bn_phaze=bn_train)
+    feature_fake, d_fake, d_fake_output = discriminator(decoder_output, activation='swish', scope='Discriminator',
+                                                        reuse=True, bn_phaze=bn_train)
 
     d_fake_output = tf.squeeze(d_fake_output)
 
@@ -535,68 +542,53 @@ def train(b_test=False):
 
         try:
             saver = tf.train.Saver()
-            saver.restore(sess, './model/SE_ADNet_L.ckpt')
+            saver.restore(sess, './model/STADNet.ckpt')
         except:
             print('Restore failed')
 
         if b_test == False:
             num_itr = int(len(inlier_sample)/batch_size)
-            early_stop = False
-            f_loss_list = []
             b_wgan = False
 
             for epoch in range(num_epoch):
                 for itr in range(num_itr):
                     batch_x, batch_seq = util.get_sequence_batch(inlier_sample, width, batch_size)
 
-                    #print('batch seq shape:', batch_seq.shape)
-
                     cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
                     cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
-                    #print('batch CNN shape:', batch_seq.shape)
+                    _, r_loss = sess.run([g_optimizer, residual_loss],
+                                         feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
+                                                    bn_train: True, add_noise: True})
+                    _, f_loss = sess.run([f_optimizer, feature_matching_loss],
+                                         feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
+                                                    bn_train: True, add_noise: True})
+                    sess.run([gan_g_optimzier],
+                             feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
+                                        bn_train: True, add_noise: True})
 
                     if b_wgan:
                         # wgan
-                        sess.run(
-                            [d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
-                            feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
-
-                        batch_x, batch_seq = util.get_sequence_batch(inlier_sample, width, batch_size)
-
-                        cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
-                        cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
-
                         _, _, d_loss, l_real, l_fake = sess.run([d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
-                                               feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
+                                                                feed_dict={g_encoder_input: cnn_batch_x,
+                                                                           lstm_input: batch_seq,
+                                                                           bn_train: True,
+                                                                           add_noise: False})
                     else:
-                        sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
-                                                             feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
-
-                        batch_x, batch_seq = util.get_sequence_batch(inlier_sample, width, batch_size)
-
-                        cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
-                        cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
-
                         _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
-                                                             feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
-
-                    _, r_loss = sess.run([g_optimizer, residual_loss],
-                                                 feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
-
-                    _, f_loss = sess.run([f_optimizer, feature_matching_loss],
-                                                 feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,bn_train: True})
-
-                    sess.run([gan_g_optimzier],
-                             feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: True})
+                                                             feed_dict={g_encoder_input: cnn_batch_x,
+                                                                        lstm_input: batch_seq,
+                                                                        bn_train: True,
+                                                                        add_noise: True})
 
                     if (itr + 1) % 10 == 0:
                         print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
                         print('epoch: {0}, itr: {1}, d_loss: {2}, r_loss: {3}, f_loss: {4}'.format(epoch, itr, d_loss, r_loss, f_loss))
-            try:
-                saver.save(sess, './model/SE_ADNet_L.ckpt')
-            except:
-                print('Save failed')
+
+                        try:
+                            saver.save(sess, './model/STADNet.ckpt')
+                        except:
+                            print('Save failed')
         else:
             for i in range(100):
                 batch_x, batch_seq = util.get_sequence_batch(outlier_sample, width, batch_size)
@@ -605,7 +597,8 @@ def train(b_test=False):
                 cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
                 d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
-                                                  feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: False})
+                                                  feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
+                                                             bn_train: False, add_noise: True})
 
                 score = 10 * r_loss
                 print('outlier Anomaly Score:', score, ', d loss:', d_loss, ', r loss:', r_loss, ', f loss:', f_loss)
@@ -616,7 +609,8 @@ def train(b_test=False):
                 cnn_batch_x = np.expand_dims(cnn_batch_x, axis=3)
 
                 d_loss, r_loss, f_loss = sess.run([d_fake_output, residual_loss, feature_matching_loss],
-                                                  feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq, bn_train: False})
+                                                  feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
+                                                             bn_train: False, add_noise: True})
 
                 score = 10 * r_loss
 
@@ -630,11 +624,13 @@ if __name__ == '__main__':
     parser.add_argument('--test', help='Test mode', action='store_true')
     parser.add_argument('--epoch', help='epoch count', default=1)
     parser.add_argument('--batchsize', help='batch size', default=128)
+    parser.add_argument('--noise', help='Add random noise', action='store_true')
 
     args = parser.parse_args()
 
     num_epoch = args.epoch
     batch_size = args.batchsize
+    use_random_noise = args.noise
 
     if args.train:
         train(b_test=False)
@@ -643,4 +639,3 @@ if __name__ == '__main__':
         train(b_test=True)
     else:
         print('Please set options. --train or -- test')
-   
