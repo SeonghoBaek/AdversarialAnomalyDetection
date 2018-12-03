@@ -1,12 +1,12 @@
 # Adversarial Anomaly Detection
 Unsupervised Adversarial Anomaly Detection
 
-Task: Anomaly detection in multivariate time series variable.
-About 150 features in 1 input sample per 1 sec.
-t1: [f1, f2, ... , f150]
-t2: [f1, f2, ... , f150]
-...
-tn: [f1, f2, ... , f150]
+# Task: Anomaly detection in multivariate time series variable.
+- About 150 features in 1 input sample per 1 sec.
+- t1: [f1, f2, ... , f150]
+- t2: [f1, f2, ... , f150]
+- ...
+- tn: [f1, f2, ... , f150]
 
 # SEADNet
 - Sequence Embedding, Anomaly Detection Network
