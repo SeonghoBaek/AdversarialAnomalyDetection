@@ -245,10 +245,13 @@ def add_dense_layer(layer, filter_dims, act_func=tf.nn.relu, scope='dense_layer'
     return l
 
 
-def add_dense_transition(layer, filter_dims, act_func=tf.nn.relu, scope='transition', bn_phaze=False):
+def add_dense_transition(layer, filter_dims, act_func=tf.nn.relu, scope='transition', use_bn=True, bn_phaze=False):
     with tf.variable_scope(scope):
         l = act_func(layer)
-        l = batch_norm_conv(l, b_train=bn_phaze, scope='bn')
+        
+        if use_bn:
+            l = batch_norm_conv(l, b_train=bn_phaze, scope='bn')
+        
         l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
     return l
 
