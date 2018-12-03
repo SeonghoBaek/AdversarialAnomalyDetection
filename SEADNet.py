@@ -358,7 +358,8 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
         d_loss_real = tf.reduce_mean(real)
         d_loss_fake = tf.reduce_mean(fake)
 
-        return gamma * (d_loss_real - d_loss_fake) + 1, d_loss_real, d_loss_fake
+        # W Distant: f(real) - f(fake): Maximizing W Distant
+        return gamma * (d_loss_fake - d_loss_real), d_loss_real, d_loss_fake
     elif type == 'ce':
         # cross entropy
         d_loss_real = tf.reduce_mean(
@@ -370,6 +371,7 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
 
 def train(pretrain=True, b_test=False):
     device = {0: '/cpu:0', 1: '/gpu:0', 2: '/gpu:1'}
+    b_wgan = True
 
     # Generate test sample
     inlier_sample, outlier_sample = util.generate_samples(150, 100000, 100)
@@ -432,22 +434,23 @@ def train(pretrain=True, b_test=False):
     residual_loss = get_residual_loss(decoder_output, g_encoder_input, type='l2', gamma=1.0)
     residual_loss_l1 = get_residual_loss(decoder_output, g_encoder_input, type='l1', gamma=1.0)
     feature_matching_loss = get_feature_matching_loss(feature_fake, feature_real, type='l2', gamma=1.0)
-    # Cross Entropy
-    #gan_g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=d_fake, labels=tf.ones_like(d_fake)))
-    # WGAN
-    gan_g_loss = 1 + tf.reduce_mean(d_fake)
+    
+    if b_wgan:
+      # WGAN
+      gan_g_loss = -tf.reduce_mean(d_fake)
+      discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='wgan', gamma=1.0)
+      d_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in d_var]
+    else:
+      # Cross Entropy
+      gan_g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=d_fake, labels=tf.ones_like(d_fake)))
+      discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='ce', gamma=1.0)
+
     alpha = 1.0
     beta = 1.0
     gamma = 1.0
     generator_loss = alpha * residual_loss + beta * feature_matching_loss + gamma * gan_g_loss
     conceptual_loss = get_conceptual_loss(z_renc, z_enc, type='l2', gamma=1.0)
     conceptual_loss_l1 = get_conceptual_loss(z_renc, z_enc, type='l1', gamma=1.0)
-
-    #discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='ce', gamma=1.0)
-    discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='wgan', gamma=1.0)
-
-    # For wgan loss.
-    d_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in d_var]
 
     with tf.device(device[2]):
         # training operation
@@ -469,7 +472,7 @@ def train(pretrain=True, b_test=False):
             saver = tf.train.Saver()
             saver.restore(sess, './model/seadnet/SEADNet.ckpt')
         except:
-            print('Restore failed')
+            print('Start New Training. Wait...')
 
         if b_test == False:
             num_itr = int(len(inlier_sample)/batch_size)
@@ -481,71 +484,34 @@ def train(pretrain=True, b_test=False):
                 for itr in range(num_itr):
                     batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, batch_size)
 
-                    # wgan
-                    _, _, d_loss = sess.run([d_optimizer, d_weight_clip, discriminator_loss],
+                    if b_wgan:
+                      # wgan
+                      _, _, d_loss, l_real, l_fake = sess.run([d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
                                           feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
-
-                    # gan cross entropy. 2(discriminator):1(generator) training.
-                    #sess.run([d_optimizer, discriminator_loss],
-                    #         feed_dict={g_encoder_input: batch_x,
-                    #                    lstm_input: batch_seq, bn_train: True})
-
-                    batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, batch_size)
-
-                    _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
-                                                         feed_dict={g_encoder_input: batch_x,
-                                                                    lstm_input: batch_seq, bn_train: True, add_noise: True})
-
+                      sess.run([gan_g_optimizer], feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
+                    else:
+                      # gan cross entropy. 2(discriminator):1(generator) training.
+                      _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
+                                                           feed_dict={g_encoder_input: batch_x,
+                                                                      lstm_input: batch_seq, bn_train: True, add_noise: True})
+  
+                      _, f_loss = sess.run([f_optimizer, feature_matching_loss],
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
+                                        
                     _, r_loss = sess.run([g_optimizer, residual_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
-
-                    _, f_loss = sess.run([f_optimizer, feature_matching_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
-
-                    sess.run([gan_g_optimizer],
-                             feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
-
-                    # Test.
-                    #_, r_loss = sess.run([g_optimizer, residual_loss],
-                    #                     feed_dict={d_input: batch_x, g_encoder_input: batch_x, lstm_input: batch_seq})
+                                       feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     _, c_loss = sess.run([r_optimizer, conceptual_loss],
                                          feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True, add_noise: True})
 
                     if (itr + 1) % 200 == 0:
                         print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
-                        print('epoch: {0}, itr: {1}, d_loss: {2}, r_loss: {3}, c_loss: {4}, f_loss: {5}'.format(epoch, itr, d_loss, r_loss, c_loss, f_loss))
-                        f_loss_list.append(f_loss)
-                        if len(f_loss_list) > 10:
-                            if sum(f_loss_list[-5:])/5 < 0.002:
-                                early_stop = False
+                        print('epoch: {0}, itr: {1}, d_loss: {2}, r_loss: {3}, c_loss: {4}'.format(epoch, itr, d_loss, r_loss, c_loss))
+                        
                         try:
                             saver.save(sess, './model/seadnet/SEADNet.ckpt')
                         except:
                             print('Save failed')
-
-                    if early_stop:
-                        break
-                if early_stop:
-                    break
-
-            for i in range(10):
-                batch_x, batch_seq = util.get_sequence_batch(outlier_sample, lstm_sequence_length, 1)
-
-                d_loss, r_loss, f_loss, c_loss = sess.run([d_real_output, residual_loss, feature_matching_loss, conceptual_loss],
-                                                  feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: False, add_noise: True})
-
-                score = 10 * (r_loss + c_loss)
-                print('outlier Anomaly Score:', score, ', d loss:', d_loss, ', r loss:', r_loss, ', c loss:', c_loss)
-
-                batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, 1)
-
-                d_loss, r_loss, f_loss, c_loss = sess.run([d_real_output, residual_loss, feature_matching_loss, conceptual_loss],
-                                                  feed_dict={g_encoder_input: batch_x,
-                                                             lstm_input: batch_seq, bn_train: False, add_noise: True})
-                score = 10 * (r_loss + c_loss)
-                print('inlier Anomaly Score:', score, ', d loss:', d_loss, ', r loss:', r_loss, ', c loss:', c_loss)
-
             try:
                 saver.save(sess, './model/seadnet/SEADNet.ckpt')
             except:
@@ -557,22 +523,29 @@ def train(pretrain=True, b_test=False):
                 # batch_x = np.ones_like(batch_x)
                 # batch_x = [np.random.binomial(1, 0.5, 150)]
 
-                d_loss, r_loss, f_loss, c_loss = sess.run([d_real_output, residual_loss_l1, feature_matching_loss, conceptual_loss_l1],
-                                                  feed_dict={g_encoder_input: batch_x,
-                                                             lstm_input: batch_seq, bn_train: False, add_noise: True})
+                d_real_loss, d_fake_loss,r_loss, c_loss = sess.run([d_real, d_fake, residual_loss_l1, conceptual_loss_l1],
+                                                                    feed_dict={g_encoder_input: batch_x,
+                                                                    lstm_input: batch_seq, bn_train: False, add_noise: True})
 
                 score = 10 * (r_loss + c_loss)
-                print('outlier Anomaly Score:', score, 'd loss:', d_loss, ', f loss:', f_loss, ', r loss:', r_loss, ', c loss:', c_loss)
-
+                
+                if b_wgan:
+                  print('Outlier Anomaly Score:', score, 'd loss:', d_real_loss - d_fake_loss, ', r loss:', r_loss, ', c loss:', c_loss)
+                else:
+                  print('Outlier Anomaly Score:', score, 'd loss:', d_fake_loss, ', r loss:', r_loss, ', c loss:', c_loss)
+                  
                 batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, 1)
 
-                d_loss, r_loss, f_loss, c_loss = sess.run([d_real_output, residual_loss_l1, feature_matching_loss, conceptual_loss_l1],
-                                                  feed_dict={g_encoder_input: batch_x,
-                                                             lstm_input: batch_seq, bn_train: False, add_noise: True})
+                d_real_loss, d_fake_loss, r_loss, f_loss, c_loss = sess.run([d_real, d_fake, residual_loss_l1, feature_matching_loss, conceptual_loss_l1],
+                                                                            feed_dict={g_encoder_input: batch_x,
+                                                                            lstm_input: batch_seq, bn_train: False, add_noise: True})
 
                 score = 10 * (r_loss + c_loss)
 
-                print('inlier Anomaly Score:', score, 'd loss:', d_loss, ', f loss:', f_loss , ', r loss:', r_loss, ', c loss:', c_loss)
+                if b_wgan:
+                  print('Inlier Anomaly Score:', score, 'd loss:', d_real_loss - d_fake_loss, ', r loss:', r_loss, ', c loss:', c_loss)
+                else:
+                  print('Inlier Anomaly Score:', score, 'd loss:', d_fake_loss, ', r loss:', r_loss, ', c loss:', c_loss)
                 print()
 
 
