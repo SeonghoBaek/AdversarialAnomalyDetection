@@ -14,6 +14,8 @@ input_feature_dim = 150
 
 width = 20
 height = input_feature_dim
+num_block_layers = 3
+dense_layer_depth = 16
 
 g_encoder_z_local_dim = 64
 g_encoder_z_dim = g_encoder_z_local_dim
@@ -76,7 +78,10 @@ def conv(input, scope, filter_dims, stride_dims, padding='SAME',
             map = tf.nn.bias_add(map, conv_bias)
 
         # Apply non-linearity (if asked) and return output
-        activation = non_linear_fn(map)
+        if non_linear_fn is not None:
+            activation = non_linear_fn(map)
+        else:
+            activation = map
 
         # print(activation.get_shape().as_list())
         return activation
@@ -140,6 +145,20 @@ def deconv(input, batch_size, scope, filter_dims, stride_dims, padding='SAME', n
 
         # print(scope, 'out', activation.get_shape().as_list())
         return activation
+
+
+def avg_pool(input, scope, filter_dims, stride_dims, padding='SAME'):
+    assert (len(filter_dims) == 2)  # filter height and width
+    assert (len(stride_dims) == 2)  # stride height and width
+
+    filter_h, filter_w = filter_dims
+    stride_h, stride_w = stride_dims
+
+    with tf.variable_scope(scope):
+        pool = tf.nn.avg_pool(input, ksize=[1, filter_h, filter_w, 1], strides=[1, stride_h, stride_w, 1],
+                              padding=padding)
+
+        return pool
 
 
 def max_pool(input, scope, filter_dims, stride_dims, padding='SAME'):
@@ -213,6 +232,27 @@ def lstm_network(input, scope='lstm_network'):
     return z_sequence_output
 
 
+def add_dense_layer(layer, filter_dims, act_func=tf.nn.relu, scope='dense_layer', use_bn=True, bn_phaze=False):
+    with tf.variable_scope(scope):
+        l = act_func(layer)
+
+        if use_bn:
+            l = batch_norm_conv(l, b_train=bn_phaze, scope='bn')
+
+        l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        l = tf.concat([l, layer], 3)
+
+    return l
+
+
+def add_dense_transition(layer, filter_dims, act_func=tf.nn.relu, scope='transition', bn_phaze=False):
+    with tf.variable_scope(scope):
+        l = act_func(layer)
+        l = batch_norm_conv(l, b_train=bn_phaze, scope='bn')
+        l = conv(l, scope='conv', filter_dims=filter_dims, stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+    return l
+
+
 def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze=False, b_noise=False):
     with tf.variable_scope(scope):
         if activation == 'swish':
@@ -225,31 +265,38 @@ def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze
         if use_random_noise:
             x = tf.cond(b_noise, lambda: util.add_gaussian_noise(x, 0.0, 0.1), lambda: util.add_gaussian_noise(x, 0.0, -1.0))
 
-        g_enc_conv1 = conv(x, scope='g_enc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        l = conv(x, scope='g_enc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1], non_linear_fn=None, bias=False)
 
-        g_enc_conv2 = conv(g_enc_conv1, scope='g_enc_conv2', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        g_enc_conv3 = conv(g_enc_conv2, scope='g_enc_conv3', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        with tf.variable_scope('dense_block_1'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, dense_layer_depth], act_func=act_func, bn_phaze=bn_phaze, scope='layer' + str(i))
+            l = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func, scope='dense_transition_1', bn_phaze=bn_phaze)
 
-        g_enc_conv_fused1 = tf.concat([g_enc_conv2, g_enc_conv3], axis=3)
-        g_enc_conv_fused1 = batch_norm_conv(g_enc_conv_fused1, b_train=bn_phaze, scope='g_enc_conv_fused1_bn')
+        with tf.variable_scope('dense_block_2'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, dense_layer_depth], act_func=act_func, bn_phaze=bn_phaze, scope='layer' + str(i))
+            l = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func, scope='dense_transition_1', bn_phaze=bn_phaze)
 
-        g_enc_conv4 = conv(g_enc_conv_fused1, scope='g_enc_conv4', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        g_enc_conv5 = conv(g_enc_conv4, scope='g_enc_conv5', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        g_enc_conv6 = conv(g_enc_conv5, scope='g_enc_conv6', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        '''
+        with tf.variable_scope('dense_block_3'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, bn_phaze=bn_phaze)
+            l = add_dense_transition(l, filter_dims=[1, 1, 32], act_func=act_func, scope='dense_transition_1', bn_phaze=bn_phaze)
 
-        g_enc_conv_fused2 = tf.concat([g_enc_conv2, g_enc_conv3, g_enc_conv4, g_enc_conv5, g_enc_conv6], axis=3)
-        g_enc_conv_fused2 = batch_norm_conv(g_enc_conv_fused2, b_train=bn_phaze, scope='g_enc_conv_fused2_bn')
+        with tf.variable_scope('dense_block_4'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, bn_phaze=bn_phaze)
+            l = add_dense_transition(l, filter_dims=[1, 1, 32], act_func=act_func, scope='dense_transition_1', bn_phaze=bn_phaze)
+        '''
+        
+        with tf.variable_scope('dense_block_final'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, dense_layer_depth], act_func=act_func, bn_phaze=bn_phaze, scope='layer' + str(i))
+            last_dense_layer = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func, scope='dense_transition_1', bn_phaze=bn_phaze)
+        
+        last_dense_layer = batch_norm_conv(last_dense_layer, b_train=bn_phaze, scope='last_dense_layer')
 
-        g_enc_conv7 = conv(g_enc_conv_fused2, scope='g_enc_conv7', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        g_enc_conv8  = conv(g_enc_conv7, scope='g_enc_conv8', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func)
-        g_enc_conv9 = conv(g_enc_conv8, scope='g_enc_conv9', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func)
-
-        g_enc_conv_fused3 = tf.concat([g_enc_conv2, g_enc_conv3, g_enc_conv4, g_enc_conv5, g_enc_conv6, g_enc_conv7, g_enc_conv8, g_enc_conv9], axis=3)
-        g_enc_conv_fused3 = batch_norm_conv(g_enc_conv_fused3, b_train=bn_phaze, scope='g_enc_conv_fused3_bn')
-
-        g_enc_conv10= conv(g_enc_conv_fused3, scope='g_enc_conv10', filter_dims=[1, 1, 32], stride_dims=[1, 1], non_linear_fn=act_func)
-
-        g_enc_z_local = fc(g_enc_conv10, scope='g_enc_z_fc', out_dim=g_encoder_z_local_dim, non_linear_fn=None)
+        g_enc_z_local = fc(last_dense_layer, scope='g_enc_z_fc', out_dim=g_encoder_z_local_dim, non_linear_fn=None)
 
         return g_enc_z_local
 
@@ -292,51 +339,44 @@ def discriminator(input_data, activation='swish', scope='discriminator', reuse=F
         else:
             act_func = tf.nn.sigmoid
 
+        l = conv(input_data, scope='dc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1],
+                 non_linear_fn=None, bias=False)
+
+        with tf.variable_scope('dense_block_1'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, dense_layer_depth], act_func=act_func, use_bn=False, bn_phaze=bn_phaze, scope='layer' + str(i))
+            l = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func, scope='dense_transition_1',
+                                     bn_phaze=bn_phaze)
+
+        with tf.variable_scope('dense_block_2'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, dense_layer_depth], act_func=act_func, use_bn=False, bn_phaze=bn_phaze, scope='layer' + str(i))
+            l = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func, scope='dense_transition_1',
+                                     bn_phaze=bn_phaze)
         '''
-        input = tf.reshape(x, shape=[-1, 10, 10, 30])
-        dc_conv1 = conv(input, scope='dc_conv1', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
-        dc_conv2 = conv(dc_conv1, scope='dc_conv2', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
-        dc_conv_fused1 = tf.concat([dc_conv1, dc_conv2], axis=3)
+        with tf.variable_scope('dense_block_3'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, bn_phaze=bn_phaze)
+            l = add_dense_transition(l, filter_dims=[1, 1, 32], act_func=act_func, scope='dense_transition_1',
+                                     bn_phaze=bn_phaze)
 
-        dc_conv3 = conv(dc_conv_fused1, scope='dc_conv3', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
-        dc_conv4 = conv(dc_conv3, scope='dc_conv4', filter_dims=[3, 3, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=True)
-        dc_conv_fused2 = tf.concat([dc_conv1, dc_conv2, dc_conv3, dc_conv4], axis=3)
-
-        dc_conv5 = conv(dc_conv_fused2, scope='dc_conv5', filter_dims=[3, 3, 32], stride_dims=[1, 1], padding='VALID', non_linear_fn=act_func)
-        dc_conv6 = conv(dc_conv5, scope='dc_conv6', filter_dims=[1, 1, 16], stride_dims=[1, 1], non_linear_fn=act_func)
-
-        dc_output = fc(dc_conv6, scope='dc_fc', out_dim=1, non_linear_fn=None)
-        dc_final_layer = dc_conv6
-    
-        return dc_final_layer, dc_output, tf.sigmoid(dc_output)
+        with tf.variable_scope('dense_block_4'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, bn_phaze=bn_phaze)
+            l = add_dense_transition(l, filter_dims=[1, 1, 32], act_func=act_func, scope='dense_transition_1',
+                                     bn_phaze=bn_phaze)
         '''
 
-        dc_conv1 = conv(input_data, scope='dc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        dc_conv2 = conv(dc_conv1, scope='dc_conv2', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        dc_conv3 = conv(dc_conv2, scope='dc_conv3', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
+        with tf.variable_scope('dense_block_5'):
+            for i in range(num_block_layers):
+                l = add_dense_layer(l, filter_dims=[1, 2, dense_layer_depth], act_func=act_func, use_bn=False, bn_phaze=bn_phaze, scope='layer' + str(i))
+            last_dense_layer = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func,
+                                                    scope='dense_transition_1', bn_phaze=bn_phaze)
 
-        dc_conv_fused1 = tf.concat([dc_conv2, dc_conv3], axis=3)
-        dc_conv_fused1 = batch_norm_conv(dc_conv_fused1, b_train=bn_phaze, scope='dc_conv_fused1_bn')
+            #dc_final_layer = batch_norm_conv(last_dense_layer, b_train=bn_phaze, scope='last_dense_layer')
+            dc_final_layer = last_dense_layer
 
-        dc_conv4 = conv(dc_conv_fused1, scope='dc_conv4', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        dc_conv5 = conv(dc_conv4, scope='dc_conv5', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        dc_conv6 = conv(dc_conv5, scope='dc_conv6', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-
-        dc_conv_fused2 = tf.concat([dc_conv2, dc_conv3, dc_conv4, dc_conv5, dc_conv6], axis=3)
-        dc_conv_fused2 = batch_norm_conv(dc_conv_fused2, b_train=bn_phaze, scope='dc_conv_fused2_bn')
-
-        dc_conv7 = conv(dc_conv_fused2, scope='dc_conv7', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func, bias=False)
-        dc_conv8 = conv(dc_conv7, scope='dc_conv8', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func)
-        dc_conv9 = conv(dc_conv8, scope='dc_conv9', filter_dims=[1, 2, 32], stride_dims=[1, 1], non_linear_fn=act_func)
-
-        dc_conv_fused3 = tf.concat([dc_conv2, dc_conv3, dc_conv4, dc_conv5, dc_conv6, dc_conv7, dc_conv8, dc_conv9], axis=3)
-        dc_conv_fused3 = batch_norm_conv(dc_conv_fused3, b_train=bn_phaze, scope='dc_conv_fused3_bn')
-
-        dc_conv10 = conv(dc_conv_fused3, scope='dc_conv10', filter_dims=[1, 1, 32], stride_dims=[1, 1], non_linear_fn=act_func)
-
-        dc_output = fc(dc_conv10, scope='dc_fc', out_dim=1, non_linear_fn=None)
-
-        dc_final_layer = dc_conv10
+            dc_output = fc(dc_final_layer, scope='g_enc_z_fc', out_dim=1, non_linear_fn=None)
 
         return dc_final_layer, dc_output, tf.sigmoid(dc_output)
 
@@ -592,7 +632,7 @@ def train(b_test=False):
                             print('Save failed')
         else:
             for i in range(100):
-                outlier_sample = outlier_sample + np.random.normal(loc=2.0, scale=0.1, size=outlier_sample.shape)
+                #outlier_sample = outlier_sample + np.random.normal(loc=2.0, scale=0.1, size=outlier_sample.shape)
                 batch_x, batch_seq = util.get_sequence_batch(outlier_sample, width, batch_size)
 
                 cnn_batch_x = np.transpose(batch_seq, axes=[0, 2, 1])
@@ -641,3 +681,4 @@ if __name__ == '__main__':
         train(b_test=True)
     else:
         print('Please set options. --train or -- test')
+
