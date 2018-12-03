@@ -27,8 +27,8 @@ Decoder
 - Reconstruct using concatenated latent variable
 
 Test
-- Normal: mean 0.0, stdev 1.0, 100,000 samples
-- Anomaly: mean 1.0, stddev 1.0, 100 samples
+- Normal: mean 0.0, stdev 1.0, 100,000 samples, sigmoid standardazation for harder discrimination
+- Anomaly: mean 1.0, stddev 1.0, 100 samples, sigmoid standardazation for harder discrimination
 - Training only normal samples
 - Discriminate anomaly samples at test time
 
@@ -56,8 +56,8 @@ Decoder
 - Reconstruct using concatenated latent variable
 
 Test
-- Normal: mean 0.0, stdev 1.0, 100,000 samples
-- Anomaly: mean 1.0, stddev 1.0, 100 samples
+- Normal: mean 0.0, stdev 1.0, 100,000 samples, sigmoid standardazation for harder discrimination
+- Anomaly: mean 1.0, stddev 1.0, 100 samples, sigmoid standardazation for harder discrimination
 - Training only normal samples
 - Discriminate anomaly samples at test time
 
