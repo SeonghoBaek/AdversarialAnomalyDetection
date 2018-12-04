@@ -96,7 +96,7 @@ def get_deconv2d_output_dims(input_dims, filter_dims, stride_dims, padding):
 
 
 def deconv(input_data, b_size, scope, filter_dims, stride_dims, padding='SAME', non_linear_fn=tf.nn.relu):
-    input_dims = input.get_shape().as_list()
+    input_dims = input_data.get_shape().as_list()
     # print(scope, 'in', input_dims)
     assert (len(input_dims) == 4)  # batch_size, height, width, num_channels_in
     assert (len(filter_dims) == 3)  # height, width and num_channels out
@@ -229,7 +229,7 @@ def add_dense_transition(layer, filter_dims, act_func=tf.nn.relu, scope='transit
     return l
 
 
-def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze=False, b_noise=False):
+def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze=False):
     with tf.variable_scope(scope):
         if activation == 'swish':
             act_func = util.swish
@@ -239,8 +239,7 @@ def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze
             act_func = tf.nn.sigmoid
 
         if use_random_noise:
-            x = tf.cond(b_noise, lambda: util.add_gaussian_noise(x, 0.0, 0.1),
-                        lambda: util.add_gaussian_noise(x, 0.0, -1.0))
+            x = util.add_gaussian_noise(x, 0.0, 0.1)
 
         l = conv(x, scope='g_enc_conv1', filter_dims=[g_encoder_input_dim, 2, 64], stride_dims=[1, 1],
                  non_linear_fn=None, bias=False)
@@ -297,13 +296,13 @@ def g_decoder_network(x, activation='swish', scope='g_decoder_network', bn_phaze
         # print('decoder input:', x.get_shape())
         input = tf.reshape(x, shape=[-1, 4, 4, 8])
 
-        g_dec_conv1 = deconv(input, batch_size=batch_size, scope='g_dec_conv1', filter_dims=[3, 3, 512],
+        g_dec_conv1 = deconv(input, b_size=batch_size, scope='g_dec_conv1', filter_dims=[3, 3, 512],
                              stride_dims=[1, 1], padding='VALID', non_linear_fn=act_func)
         # print('deconv1:', g_dec_conv1.get_shape())
-        g_dec_conv2 = deconv(g_dec_conv1, batch_size=batch_size, scope='g_dec_conv2', filter_dims=[3, 3, 256],
+        g_dec_conv2 = deconv(g_dec_conv1, b_size=batch_size, scope='g_dec_conv2', filter_dims=[3, 3, 256],
                              stride_dims=[1, 1], padding='VALID', non_linear_fn=act_func)
         # print('deconv2:', g_dec_conv2.get_shape())
-        g_dec_conv3 = deconv(g_dec_conv2, batch_size=batch_size, scope='g_dec_conv3', filter_dims=[3, 3, 30],
+        g_dec_conv3 = deconv(g_dec_conv2, b_size=batch_size, scope='g_dec_conv3', filter_dims=[3, 3, 30],
                              stride_dims=[1, 1], padding='VALID', non_linear_fn=act_func)
         # print('deconv3:', g_dec_conv3.get_shape())
 
@@ -486,7 +485,6 @@ def train(b_test=False):
     inlier_sample, outlier_sample = util.generate_samples(150, 100000, 1000)
 
     bn_train = tf.placeholder(tf.bool)
-    add_noise = tf.placeholder(tf.bool)
 
     # H: 150, W: 20, C: 1
     g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, height, width, 1])
@@ -498,8 +496,7 @@ def train(b_test=False):
 
     with tf.device(device[2]):
         # Z enc: Encoder latent output
-        z_local = g_encoder_network(g_encoder_input, activation='swish', scope='G_Encoder', bn_phaze=bn_train,
-                                    b_noise=add_noise)
+        z_local = g_encoder_network(g_encoder_input, activation='swish', scope='G_Encoder', bn_phaze=bn_train)
 
     with tf.device(device[0]):
         z_enc = tf.concat([z_seq, z_local], 1)
@@ -568,28 +565,26 @@ def train(b_test=False):
 
                     _, r_loss = sess.run([g_optimizer, residual_loss],
                                          feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
-                                                    bn_train: True, add_noise: True})
+                                                    bn_train: True})
 
                     _, g_loss = sess.run([gan_g_optimzier, gan_g_loss],
                                          feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
-                                         bn_train: True, add_noise: True})
+                                         bn_train: True})
 
                     if b_wgan:
                         _, _, d_loss, l_real, l_fake = sess.run(
                             [d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
                             feed_dict={g_encoder_input: cnn_batch_x,
                                        lstm_input: batch_seq,
-                                       bn_train: True,
-                                       add_noise: False})
+                                       bn_train: True})
                     else:
                         _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
                                                              feed_dict={g_encoder_input: cnn_batch_x,
                                                                         lstm_input: batch_seq,
-                                                                        bn_train: True,
-                                                                        add_noise: True})
+                                                                        bn_train: True})
                     _, f_loss = sess.run([f_optimizer, feature_matching_loss],
                                          feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
-                                                    bn_train: True, add_noise: True})
+                                                    bn_train: True})
 
                     if (itr + 1) % 10 == 0:
                         print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
@@ -611,7 +606,7 @@ def train(b_test=False):
                 d_real_loss, d_fake_loss, r_loss, f_loss = sess.run(
                     [d_real_output, d_fake_output, residual_loss, feature_matching_loss],
                     feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
-                               bn_train: False, add_noise: True})
+                               bn_train: False})
                 score = 10 * r_loss
 
                 if b_wgan:
@@ -629,7 +624,7 @@ def train(b_test=False):
                 d_real_loss, d_fake_loss, r_loss, f_loss = sess.run(
                     [d_real_output, d_fake_output, residual_loss, feature_matching_loss],
                     feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
-                               bn_train: False, add_noise: True})
+                               bn_train: False})
                 score = 10 * r_loss
 
                 if b_wgan:
