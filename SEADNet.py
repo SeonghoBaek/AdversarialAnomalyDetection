@@ -90,8 +90,7 @@ def dense(x, n1, n2, scope='dense', initial_value=None, use_bias=True):
         return out
 
 
-def g_encoder_network(x, pretrained=False, weights=None, biases=None, activation='swish', scope='g_encoder_network',
-                      bn_phaze=False, b_noise=False):
+def g_encoder_network(x, pretrained=False, weights=None, biases=None, activation='swish', scope='g_encoder_network', bn_phaze=False):
     with tf.variable_scope(scope):
         if activation == 'swish':
             act_func = util.swish
@@ -101,8 +100,7 @@ def g_encoder_network(x, pretrained=False, weights=None, biases=None, activation
             act_func = tf.nn.sigmoid
 
         if use_random_noise:
-            x = tf.cond(b_noise, lambda: util.add_gaussian_noise(x, 0.0, 0.1),
-                        lambda: util.add_gaussian_noise(x, 0.0, -1.0))
+            x = util.add_gaussian_noise(x, 0.0, 0.1)
 
         if pretrained:
             g_enc_dense_1 = act_func(dense(x, g_encoder_input_dim, g_encoder_layer1_dim, scope='g_enc_dense_1',
@@ -146,7 +144,8 @@ def g_decoder_network(x, activation='swish', scope='g_decoder_network', bn_phaze
         g_dec_dense_2 = batch_norm(g_dec_dense_2, bn_phaze, scope='g_dec_dense2_bn')
         g_dec_dense_1 = act_func(dense(g_dec_dense_2, g_decoder_layer2_dim, g_decoder_layer1_dim, scope='g_dec_dense_1'))
         g_dec_dense_1 = batch_norm(g_dec_dense_1, bn_phaze, scope='g_dec_dense1_bn')
-        g_dec_output = act_func(dense(g_dec_dense_1, g_decoder_layer1_dim, g_decoder_output_dim, scope='g_dec_output'))
+        #g_dec_output = act_func(dense(g_dec_dense_1, g_decoder_layer1_dim, g_decoder_output_dim, scope='g_dec_output'))
+        g_dec_output = dense(g_dec_dense_1, g_decoder_layer1_dim, g_decoder_output_dim, scope='g_dec_output')
         return g_dec_output
 
 
@@ -447,7 +446,7 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
 
 def train(pretrain=True, b_test=False):
     device = {0: '/cpu:0', 1: '/gpu:0', 2: '/gpu:1'}
-    b_wgan = False
+    b_wgan = True
 
     # Generate test sample
     inlier_sample, outlier_sample = util.generate_samples(150, 100000, 100)
@@ -460,7 +459,6 @@ def train(pretrain=True, b_test=False):
             stacked_auto_encoder_weights = None
             stacked_auto_encoder_biases = None
 
-    add_noise = tf.placeholder(tf.bool)
     bn_train = tf.placeholder(tf.bool)
     g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, input_feature_dim])
 
@@ -468,7 +466,7 @@ def train(pretrain=True, b_test=False):
         # Z local: Encoder latent output
         z_local = g_encoder_network(g_encoder_input, pretrained=pretrain,
                                     weights=stacked_auto_encoder_weights, biases=stacked_auto_encoder_biases,
-                                    activation='swish', scope='G_Encoder', bn_phaze=bn_train, b_noise=add_noise)
+                                    activation='swish', scope='G_Encoder', bn_phaze=bn_train)
 
     lstm_input = tf.placeholder(dtype=tf.float32, shape=[None, lstm_sequence_length, input_feature_dim])
     # Z seq: LSTM sequence latent output
@@ -488,8 +486,8 @@ def train(pretrain=True, b_test=False):
     with tf.device(device[2]):
         # Discriminator output
         #   - feature real/fake: Feature matching approach. Returns last feature layer
-        feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator', bn_phaze=bn_train)
-        feature_fake, d_fake, d_fake_output = discriminator(decoder_output, activation='swish', scope='Discriminator', reuse=True, bn_phaze=bn_train)
+        feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator', use_cnn=True, bn_phaze=bn_train)
+        feature_fake, d_fake, d_fake_output = discriminator(decoder_output, activation='swish', scope='Discriminator', use_cnn=True,  reuse=True, bn_phaze=bn_train)
 
         d_real_output = tf.squeeze(d_real_output)
         d_fake_output = tf.squeeze(d_fake_output)
@@ -551,29 +549,23 @@ def train(pretrain=True, b_test=False):
                     if b_wgan:
                         _, _, d_loss, l_real, l_fake = sess.run(
                             [d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
-                            feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True,
-                                       add_noise: True})
+                            feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
                     else:
                         _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
                                                              feed_dict={g_encoder_input: batch_x,
-                                                                        lstm_input: batch_seq, bn_train: True,
-                                                                        add_noise: True})
+                                                                        lstm_input: batch_seq, bn_train: True})
 
-                        _, f_loss = sess.run([f_optimizer, feature_matching_loss],
-                                             feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True,
-                                                        add_noise: True})
+                    _, f_loss = sess.run([f_optimizer, feature_matching_loss],
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
                     _, g_loss = sess.run([gan_g_optimizer, gan_g_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True,
-                                         add_noise: True})
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
                     _, r_loss = sess.run([g_optimizer, residual_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True,
-                                                    add_noise: True})
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
                     _, c_loss = sess.run([r_optimizer, conceptual_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True,
-                                                    add_noise: True})
+                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
                     if (itr + 1) % 200 == 0:
                         print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
@@ -593,7 +585,7 @@ def train(pretrain=True, b_test=False):
                 d_real_loss, d_fake_loss, r_loss, c_loss = sess.run(
                     [d_real_output, d_fake_output, residual_loss, conceptual_loss],
                     feed_dict={g_encoder_input: batch_x,
-                               lstm_input: batch_seq, bn_train: False, add_noise: True})
+                               lstm_input: batch_seq, bn_train: False})
 
                 score = 10 * (r_loss + c_loss)
 
@@ -609,7 +601,7 @@ def train(pretrain=True, b_test=False):
                 d_real_loss, d_fake_loss, r_loss, f_loss, c_loss = sess.run(
                     [d_real_output, d_fake_output, residual_loss, feature_matching_loss, conceptual_loss],
                     feed_dict={g_encoder_input: batch_x,
-                               lstm_input: batch_seq, bn_train: False, add_noise: True})
+                               lstm_input: batch_seq, bn_train: False})
 
                 score = 10 * (r_loss + c_loss)
 
