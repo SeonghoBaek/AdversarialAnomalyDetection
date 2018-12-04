@@ -40,11 +40,12 @@ d_layer_4_dim = 32
 num_block_layers = 3
 dense_layer_depth = 16
 
+
 # Pretraining Stacked Auto Encoder
-def g_encoder_pretrain(input):
+def g_encoder_pretrain(input_data):
     model = StackedAutoEncoder(dims=[g_encoder_layer1_dim, g_encoder_layer2_dim, g_encoder_layer3_dim], activations=['swish', 'swish', 'swish'],
                                epoch=[8000, 4000, 4000], loss_type='l1', lr=0.001, batch_size=32, print_step=200)
-    model.fit(input)
+    model.fit(input_data)
 
     weights, biases = model.get_layers()
 
