@@ -510,8 +510,15 @@ def train(pretrain=True, b_test=False):
 
     if b_wgan:
         # WGAN
+        eps = tf.random_uniform([batch_size, 1], minval=0.0, maxval=1.0)
+        gp_input = eps * g_encoder_input + (1.0 - eps) * decoder_output
+        _, gp_output, _ = discriminator(gp_input, activation='swish', scope='Discriminator', use_cnn=True, reuse=True, bn_phaze=bn_train)
+        gp_grad = tf.gradients(gp_output, [gp_input])[0]
+        gp_grad_norm = tf.sqrt(tf.reduce_mean((gp_grad)**2, axis=1))
+        gp_grad_pen = 10 * tf.reduce_mean((gp_grad_norm - 1)**2)
         gan_g_loss = -tf.reduce_mean(d_fake)
         discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='wgan', gamma=1.0)
+        discriminator_loss = discriminator_loss + gp_grad_pen
         d_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in d_var]
     else:
         # Cross Entropy
@@ -567,7 +574,7 @@ def train(pretrain=True, b_test=False):
                     _, c_loss = sess.run([r_optimizer, conceptual_loss],
                                          feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
-                    if (itr + 1) % 200 == 0:
+                    if (itr + 1) % 50 == 0:
                         print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
                         print('epoch: {0}, itr: {1}, d_loss: {2}, g_loss: {3},  r_loss: {4}, c_loss: {5}'.format(
                             epoch, itr, d_loss, g_loss, r_loss, c_loss))
