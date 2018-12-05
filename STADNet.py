@@ -258,7 +258,6 @@ def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze
             l = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func,
                                      scope='dense_transition_1', bn_phaze=bn_phaze)
 
-        '''
         with tf.variable_scope('dense_block_3'):
             for i in range(num_block_layers):
                 l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, use_bn=False, bn_phaze=bn_phaze, scope='layer' + str(i))
@@ -268,7 +267,6 @@ def g_encoder_network(x, activation='swish', scope='g_encoder_network', bn_phaze
             for i in range(num_block_layers):
                 l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, use_bn=False, bn_phaze=bn_phaze, scope='layer' + str(i))
             l = add_dense_transition(l, filter_dims=[1, 1, 32], act_func=act_func, scope='dense_transition_1', bn_phaze=bn_phaze)
-        '''
 
         with tf.variable_scope('dense_block_final'):
             for i in range(num_block_layers):
@@ -343,7 +341,7 @@ def discriminator(input_data, activation='swish', scope='discriminator', reuse=F
             l = add_dense_transition(l, filter_dims=[1, 1, dense_layer_depth], act_func=act_func,
                                      scope='dense_transition_1',
                                      bn_phaze=bn_phaze)
-        '''
+
         with tf.variable_scope('dense_block_3'):
             for i in range(num_block_layers):
                 l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, use_bn=False, bn_phaze=bn_phaze, scope='layer' + str(i))
@@ -355,7 +353,6 @@ def discriminator(input_data, activation='swish', scope='discriminator', reuse=F
                 l = add_dense_layer(l, filter_dims=[1, 2, 32], act_func=act_func, use_bn=False, bn_phaze=bn_phaze, scope='layer' + str(i))
             l = add_dense_transition(l, filter_dims=[1, 1, 32], act_func=act_func, scope='dense_transition_1',
                                      bn_phaze=bn_phaze)
-        '''
 
         with tf.variable_scope('dense_block_5'):
             for i in range(num_block_layers):
@@ -505,12 +502,13 @@ def train(b_test=False):
         # Reconstructed output
         decoder_output = g_decoder_network(z_enc, activation='swish', scope='G_Decoder', bn_phaze=bn_train)
 
-    # Discriminator output
-    #   - feature real/fake: Feature matching approach. Returns last feature layer
-    feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator',
-                                                        bn_phaze=bn_train)
-    feature_fake, d_fake, d_fake_output = discriminator(decoder_output, activation='swish', scope='Discriminator',
-                                                        reuse=True, bn_phaze=bn_train)
+    with tf.device(device[1]):
+        # Discriminator output
+        #   - feature real/fake: Feature matching approach. Returns last feature layer
+        feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator',
+                                                            bn_phaze=bn_train)
+        feature_fake, d_fake, d_fake_output = discriminator(decoder_output, activation='swish', scope='Discriminator',
+                                                            reuse=True, bn_phaze=bn_train)
 
     d_fake_output = tf.squeeze(d_fake_output)
     d_real_output = tf.squeeze(d_real_output)
@@ -524,13 +522,24 @@ def train(b_test=False):
     generator_vars = g_encoder_var + g_decoder_var + g_lstm_var
 
     # Joint loss term
-    residual_loss = get_residual_loss(decoder_output, g_encoder_input, type='l2', gamma=1.0)
+    residual_loss = get_residual_loss(decoder_output, g_encoder_input, type='l1', gamma=1.0)
     feature_matching_loss = get_feature_matching_loss(feature_fake, feature_real, type='l2', gamma=1.0)
 
     if b_wgan:
         # WGAN
+        eps = tf.random_uniform([batch_size, 1], minval=0.0, maxval=1.0)
+        gp_encoder_input = tf.reshape(g_encoder_input, [batch_size, -1])
+        gp_decoder_output = tf.reshape(decoder_output, [batch_size, -1])
+        gp_input = eps * gp_encoder_input + (1.0 - eps) * gp_decoder_output
+        gp_input = tf.reshape(gp_input, [batch_size, height, width, 1])
+        _, gp_output, _ = discriminator(gp_input, activation='swish', scope='Discriminator', reuse=True,
+                                        bn_phaze=bn_train)
+        gp_grad = tf.gradients(gp_output, [gp_input])[0]
+        gp_grad_norm = tf.sqrt(tf.reduce_mean((gp_grad) ** 2, axis=1))
+        gp_grad_pen = 10 * tf.reduce_mean((gp_grad_norm - 1) ** 2)
         gan_g_loss = -tf.reduce_mean(d_fake)
         discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='wgan', gamma=1.0)
+        discriminator_loss = discriminator_loss + gp_grad_pen
         d_weight_clip = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in d_var]
     else:
         # Cross Entropy
@@ -607,7 +616,8 @@ def train(b_test=False):
                     [d_real_output, d_fake_output, residual_loss, feature_matching_loss],
                     feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
                                bn_train: False})
-                score = 10 * r_loss
+                # Scale up by L1 or L2 loss
+                score = r_loss
 
                 if b_wgan:
                     print('Outlier Anomaly Score:', score, 'd fake loss:', d_fake_loss,
@@ -625,7 +635,7 @@ def train(b_test=False):
                     [d_real_output, d_fake_output, residual_loss, feature_matching_loss],
                     feed_dict={g_encoder_input: cnn_batch_x, lstm_input: batch_seq,
                                bn_train: False})
-                score = 10 * r_loss
+                score = r_loss
 
                 if b_wgan:
                     print('Inlier Anomaly Score:', score, 'd fake loss:', d_fake_loss,
@@ -642,7 +652,7 @@ if __name__ == '__main__':
     parser.add_argument('--train', help='Training mode', action='store_true')
     parser.add_argument('--test', help='Test mode', action='store_true')
     parser.add_argument('--epoch', type=int, help='epoch count', default=1)
-    parser.add_argument('--batchsize', type=int, help='batch size', default=128)
+    parser.add_argument('--batchsize', type=int, help='batch size', default=32) # 128 batch makes OOM
     parser.add_argument('--noise', help='Add random noise', action='store_true')
 
     args = parser.parse_args()
