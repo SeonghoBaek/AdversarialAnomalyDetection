@@ -7,6 +7,7 @@
 
 
 import tensorflow as tf
+from tensorflow.python.client import device_lib
 import numpy as np
 import util
 import argparse
@@ -106,7 +107,7 @@ def deconv(input_data, b_size, scope, filter_dims, stride_dims, padding='SAME', 
     num_channels_in = input_dims[-1]
     filter_h, filter_w, num_channels_out = filter_dims
     stride_h, stride_w = stride_dims
-    # Let's step into this function
+
     output_dims = get_deconv2d_output_dims(input_dims,
                                            filter_dims,
                                            stride_dims,
@@ -475,7 +476,13 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
 
 
 def train(b_test=False):
-    device = {0: '/cpu:0', 1: '/gpu:0', 2: '/gpu:1'}
+    cpu = '/device:CPU:0'
+    gpus = [dev.name for dev in device_lib.list_local_devices() if dev.device_type == 'GPU']
+    num_gpus = len(gpus)
+
+    if num_gpus == 0:  # No cuda supported gpu
+        num_gpus = 1
+        gpus = [cpu]
 
     b_wgan = True
     # Generate test sample
@@ -487,22 +494,24 @@ def train(b_test=False):
     g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, height, width, 1])
 
     lstm_input = tf.placeholder(dtype=tf.float32, shape=[None, lstm_sequence_length, input_feature_dim])
-    # Z seq: LSTM sequence latent output
-    z_seq = lstm_network(lstm_input, scope='LSTM')
-    # z_seq = np.random.uniform(-1., 1., size=[batch_size, 32])
 
-    with tf.device(device[2]):
+    with tf.device(gpus[1 % num_gpus]):
+        # Z seq: LSTM sequence latent output
+        z_seq = lstm_network(lstm_input, scope='LSTM')
+        # z_seq = np.random.uniform(-1., 1., size=[batch_size, 32])
+
+    with tf.device(gpus[2 % num_gpus]):
         # Z enc: Encoder latent output
         z_local = g_encoder_network(g_encoder_input, activation='swish', scope='G_Encoder', bn_phaze=bn_train)
 
-    with tf.device(device[0]):
+    with tf.device(cpu):
         z_enc = tf.concat([z_seq, z_local], 1)
 
-    with tf.device(device[2]):
+    with tf.device(gpus[2 % num_gpus]):
         # Reconstructed output
         decoder_output = g_decoder_network(z_enc, activation='swish', scope='G_Decoder', bn_phaze=bn_train)
 
-    with tf.device(device[1]):
+    with tf.device(gpus[3 % num_gpus]):
         # Discriminator output
         #   - feature real/fake: Feature matching approach. Returns last feature layer
         feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator',
