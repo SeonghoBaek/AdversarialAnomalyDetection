@@ -7,10 +7,14 @@
 
 
 import tensorflow as tf
+from tensorflow.python.client import device_lib
 from sae import StackedAutoEncoder
 import numpy as np
 import util
 import argparse
+import os
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 input_feature_dim = 150
 
@@ -100,7 +104,8 @@ def g_encoder_network(x, pretrained=False, weights=None, biases=None, activation
             act_func = tf.nn.sigmoid
 
         if use_random_noise:
-            x = util.add_gaussian_noise(x, 0.0, 0.1)
+            #x = util.add_gaussian_noise(x, 0.0, 0.1)
+            x = util.add_uniform_noise(x, min_val=0.0, max_val=0.1)
 
         if pretrained:
             g_enc_dense_1 = act_func(dense(x, g_encoder_input_dim, g_encoder_layer1_dim, scope='g_enc_dense_1',
@@ -444,14 +449,10 @@ def get_discriminator_loss(real, fake, type='wgan', gamma=1.0):
         return gamma * (d_loss_fake + d_loss_real), d_loss_real, d_loss_fake
 
 
-def train(pretrain=True, b_test=False):
-    device = {0: '/cpu:0', 1: '/gpu:0', 2: '/gpu:1'}
+def train(pretrain=True):
     b_wgan = True
 
-    # Generate test sample
-    inlier_sample, outlier_sample = util.generate_samples(150, 100000, 100)
-
-    with tf.device(device[2]):
+    with tf.device(gpus[1 % num_gpus]):
         # Pretraining Stacked Auto Encoder
         if pretrain:
             stacked_auto_encoder_weights, stacked_auto_encoder_biases = g_encoder_pretrain(inlier_sample)
@@ -462,43 +463,39 @@ def train(pretrain=True, b_test=False):
     bn_train = tf.placeholder(tf.bool)
     g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, input_feature_dim])
 
-    with tf.device(device[2]):
+    with tf.device(gpus[1 % num_gpus]):
         # Z local: Encoder latent output
         z_local = g_encoder_network(g_encoder_input, pretrained=pretrain,
                                     weights=stacked_auto_encoder_weights, biases=stacked_auto_encoder_biases,
                                     activation='swish', scope='G_Encoder', bn_phaze=bn_train)
 
-    lstm_input = tf.placeholder(dtype=tf.float32, shape=[None, lstm_sequence_length, input_feature_dim])
-    # Z seq: LSTM sequence latent output
-    z_seq = lstm_network(lstm_input, scope='LSTM')
-    # z_seq = np.random.uniform(-1., 1., size=[batch_size, 32])
+    with tf.device(gpus[2 % num_gpus]):
+        lstm_input = tf.placeholder(dtype=tf.float32, shape=[None, lstm_sequence_length, input_feature_dim])
+        # Z seq: LSTM sequence latent output
+        z_seq = lstm_network(lstm_input, scope='LSTM')
+        # z_seq = np.random.uniform(-1., 1., size=[batch_size, 32])
 
-    with tf.device(device[0]):
+    with tf.device(cpu):
         z_enc = tf.concat([z_seq, z_local], 1)
 
+    with tf.device(gpus[3 % num_gpus]):
+        # Reconstructed output
+        decoder_output = g_decoder_network(z_enc, activation='swish', scope='G_Decoder', bn_phaze=bn_train)
 
-    # Reconstructed output
-    decoder_output = g_decoder_network(z_enc, activation='swish', scope='G_Decoder', bn_phaze=bn_train)
+    with tf.device(gpus[4 % num_gpus]):
+        # Reencoding reconstucted output
+        z_renc = r_encoder_network(decoder_output, activation='swish', scope='R_Encoder', bn_phaze=bn_train)
 
-    # Reencoding reconstucted output
-    z_renc = r_encoder_network(decoder_output, activation='swish', scope='R_Encoder', bn_phaze=bn_train)
-
-    with tf.device(device[2]):
+    with tf.device(gpus[5 % num_gpus]):
         # Discriminator output
         #   - feature real/fake: Feature matching approach. Returns last feature layer
         feature_real, d_real, d_real_output = discriminator(g_encoder_input, activation='swish', scope='Discriminator', use_cnn=True, bn_phaze=bn_train)
         feature_fake, d_fake, d_fake_output = discriminator(decoder_output, activation='swish', scope='Discriminator', use_cnn=True,  reuse=True, bn_phaze=bn_train)
 
-        d_real_output = tf.squeeze(d_real_output)
-        d_fake_output = tf.squeeze(d_fake_output)
-
     # Trainable variable lists
-    with tf.device(device[2]):
-        d_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='Discriminator')
-
+    d_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='Discriminator')
     r_encoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='R_Encoder')
     g_encoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='G_Encoder')
-
     g_decoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='G_Decoder')
     lstm_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='LSTM')
     generator_vars = lstm_var + g_encoder_var + g_decoder_var
@@ -526,7 +523,7 @@ def train(pretrain=True, b_test=False):
         discriminator_loss, loss_real, loss_fake = get_discriminator_loss(d_real, d_fake, type='ce', gamma=1.0)
 
     conceptual_loss = get_conceptual_loss(z_renc, z_enc, type='l2', gamma=1.0)
-    
+
     d_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(discriminator_loss, var_list=d_var)
     g_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(residual_loss, var_list=generator_vars)
     f_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(feature_matching_loss, var_list=generator_vars)
@@ -542,79 +539,115 @@ def train(pretrain=True, b_test=False):
         except:
             print('Start New Training. Wait...')
 
-        if b_test == False:
-            num_itr = int(len(inlier_sample)/batch_size)
+        num_itr = int(len(inlier_sample)/batch_size)
 
-            for epoch in range(num_epoch):
-                for itr in range(num_itr):
-                    batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, batch_size)
-
-                    if b_wgan:
-                        _, _, d_loss, l_real, l_fake = sess.run(
-                            [d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
-                            feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
-                    else:
-                        _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
-                                                             feed_dict={g_encoder_input: batch_x,
-                                                                        lstm_input: batch_seq, bn_train: True})
-
-                    _, f_loss = sess.run([f_optimizer, feature_matching_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
-
-                    _, g_loss = sess.run([gan_g_optimizer, gan_g_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
-
-                    _, r_loss = sess.run([g_optimizer, residual_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
-
-                    _, c_loss = sess.run([r_optimizer, conceptual_loss],
-                                         feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
-
-                    if (itr + 1) % 50 == 0:
-                        print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
-                        print('epoch: {0}, itr: {1}, d_loss: {2}, g_loss: {3},  r_loss: {4}, c_loss: {5}'.format(
-                            epoch, itr, d_loss, g_loss, r_loss, c_loss))
-                        try:
-                            saver.save(sess, './model/seadnet/SEADNet.ckpt')
-                        except:
-                            print('Save failed')
-        else:
-            for i in range(100):
-                batch_x, batch_seq = util.get_sequence_batch(outlier_sample, lstm_sequence_length, 1)
-
-                # batch_x = np.ones_like(batch_x)
-                # batch_x = [np.random.binomial(1, 0.5, 150)]
-
-                d_real_loss, d_fake_loss, r_loss, c_loss = sess.run(
-                    [d_real_output, d_fake_output, residual_loss, conceptual_loss],
-                    feed_dict={g_encoder_input: batch_x,
-                               lstm_input: batch_seq, bn_train: False})
-
-                score = 10 * (r_loss + c_loss)
+        for epoch in range(num_epoch):
+            for itr in range(num_itr):
+                batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, batch_size)
 
                 if b_wgan:
-                    print('Outlier Anomaly Score:', score, ',d fake loss:', d_fake_loss, ',d real loss:',
-                          d_real_loss, ', r loss:', r_loss, ', c loss:', c_loss)
+                    _, _, d_loss, l_real, l_fake = sess.run(
+                        [d_optimizer, d_weight_clip, discriminator_loss, loss_real, loss_fake],
+                        feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
                 else:
-                    print('Outlier Anomaly Score:', score, ',d fake loss:', d_fake_loss, ',d real loss:',
-                          d_real_loss, ', r loss:', r_loss, ', c loss:', c_loss)
+                    _, d_loss, l_real, l_fake = sess.run([d_optimizer, discriminator_loss, loss_real, loss_fake],
+                                                         feed_dict={g_encoder_input: batch_x,
+                                                                    lstm_input: batch_seq, bn_train: True})
 
-                batch_x, batch_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, 1)
+                _, f_loss = sess.run([f_optimizer, feature_matching_loss],
+                                     feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
-                d_real_loss, d_fake_loss, r_loss, f_loss, c_loss = sess.run(
-                    [d_real_output, d_fake_output, residual_loss, feature_matching_loss, conceptual_loss],
-                    feed_dict={g_encoder_input: batch_x,
-                               lstm_input: batch_seq, bn_train: False})
+                _, g_loss = sess.run([gan_g_optimizer, gan_g_loss],
+                                     feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
-                score = 10 * (r_loss + c_loss)
+                _, r_loss = sess.run([g_optimizer, residual_loss],
+                                     feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
 
-                if b_wgan:
-                    print('Inlier Anomaly Score:', score, ',d fake loss:', d_fake_loss, ',d real loss:',
-                          d_real_loss, ', r loss:', r_loss, ', c loss:', c_loss)
-                else:
-                    print('Inlier Anomaly Score:', score, ',d fake loss:', d_fake_loss, ',d real loss:',
-                          d_real_loss, ', r loss:', r_loss, ', c loss:', c_loss)
-                print()
+                _, c_loss = sess.run([r_optimizer, conceptual_loss],
+                                     feed_dict={g_encoder_input: batch_x, lstm_input: batch_seq, bn_train: True})
+
+                if (itr + 1) % 50 == 0:
+                    print('epoch: {0}, itr: {1}, l_real: {2}, l_fake: {3}'.format(epoch, itr, l_real, l_fake))
+                    print('epoch: {0}, itr: {1}, d_loss: {2}, g_loss: {3},  r_loss: {4}, c_loss: {5}'.format(
+                        epoch, itr, d_loss, g_loss, r_loss, c_loss))
+                    try:
+                        saver.save(sess, './model/seadnet/SEADNet.ckpt')
+                    except:
+                        print('Save failed')
+
+
+def test(input_x, input_seq, num_itr):
+    stacked_auto_encoder_weights = None
+    stacked_auto_encoder_biases = None
+
+    tf.reset_default_graph()
+
+    bn_train = tf.placeholder(tf.bool)
+    g_encoder_input = tf.placeholder(dtype=tf.float32, shape=[None, input_feature_dim])
+
+    with tf.device(gpus[1 % num_gpus]):
+        # Z local: Encoder latent output
+        z_local = g_encoder_network(g_encoder_input,
+                                    weights=stacked_auto_encoder_weights, biases=stacked_auto_encoder_biases,
+                                    activation='swish', scope='G_Encoder', bn_phaze=bn_train)
+
+    with tf.device(gpus[2 % num_gpus]):
+        lstm_input = tf.placeholder(dtype=tf.float32, shape=[None, lstm_sequence_length, input_feature_dim])
+        # Z seq: LSTM sequence latent output
+        z_seq = lstm_network(lstm_input, scope='LSTM')
+        # z_seq = np.random.uniform(-1., 1., size=[batch_size, 32])
+
+    with tf.device(cpu):
+        z_enc = tf.concat([z_seq, z_local], 1)
+
+    with tf.device(gpus[3 % num_gpus]):
+        # Reconstructed output
+        decoder_output = g_decoder_network(z_enc, activation='swish', scope='G_Decoder', bn_phaze=bn_train)
+
+    with tf.device(gpus[4 % num_gpus]):
+        # Reencoding reconstucted output
+        z_renc = r_encoder_network(decoder_output, activation='swish', scope='R_Encoder', bn_phaze=bn_train)
+
+    # Trainable variable lists
+    r_encoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='R_Encoder')
+    g_encoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='G_Encoder')
+    g_decoder_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='G_Decoder')
+    lstm_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='LSTM')
+    generator_vars = lstm_var + g_encoder_var + g_decoder_var
+    conceptual_vars = g_decoder_var + r_encoder_var
+
+    # Joint loss term
+    residual_loss = get_residual_loss(decoder_output, g_encoder_input, type='l1', gamma=1.0)
+    conceptual_loss = get_conceptual_loss(z_renc, z_enc, type='l2', gamma=1.0)
+
+    g_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(residual_loss, var_list=generator_vars)
+    r_optimizer = tf.train.AdamOptimizer(learning_rate=1e-4).minimize(conceptual_loss, var_list=[conceptual_vars, generator_vars])
+
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+
+        try:
+            saver = tf.train.Saver()
+            saver.restore(sess, './model/seadnet/SEADNet.ckpt')
+        except:
+            print('Fail to load.')
+            return
+
+        r_loss_sum = []
+        c_loss_sum = []
+
+        for itr in range(num_itr):
+            _ = sess.run([g_optimizer], feed_dict={g_encoder_input: input_x, lstm_input: input_seq, bn_train: True})
+            _ = sess.run([r_optimizer], feed_dict={g_encoder_input: input_x, lstm_input: input_seq, bn_train: True})
+            r_loss, c_loss = sess.run([residual_loss, conceptual_loss], feed_dict={g_encoder_input: input_x, lstm_input: input_seq, bn_train: True})
+
+            r_loss_sum.append(r_loss)
+            c_loss_sum.append(c_loss)
+
+        r_loss_mean = np.mean(r_loss_sum)
+        c_loss_mean = np.mean(c_loss_sum)
+
+        return r_loss_mean, c_loss_mean
 
 
 if __name__ == '__main__':
@@ -632,9 +665,35 @@ if __name__ == '__main__':
     batch_size = args.batchsize
     use_random_noise = args.noise
 
+    # Generate test sample
+    inlier_sample, outlier_sample = util.generate_samples(150, 100000, 100)
+
+    cpu = '/device:CPU:0'
+    gpus = [dev.name for dev in device_lib.list_local_devices() if dev.device_type == 'GPU']
+    num_gpus = len(gpus)
+
+    if num_gpus == 0:  # No cuda supported gpu
+        num_gpus = 1
+        gpus = [cpu]
+
     if args.train:
-        train(pretrain=args.sae, b_test=False)
+        train(pretrain=args.sae)
     elif args.test:
-        train(pretrain=False, b_test=True)
+        for i in range(10):
+            data_x, data_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, 1)
+
+            recon_loss, concept_loss = test(data_x, data_seq, 20)
+            score = 10 * (recon_loss + concept_loss)
+            print('Inlier Anomaly Score:', score, ', reconstruction loss:', recon_loss, ', conceptual loss:',
+                  concept_loss)
+
+            out_x = data_x + np.random.normal(loc=0.0, scale=0.1, size=data_x.shape)
+
+            recon_loss, concept_loss = test(out_x, data_seq, 20)
+            score = 10 * (recon_loss + concept_loss)
+            print('Outlier Anomaly Score:', score, ', reconstruction loss:', recon_loss, ', conceptual loss:', concept_loss)
+
+            print()
+
     else:
         print('Please set options. --train or -- test, for training with sae use --train --sae')
