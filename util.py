@@ -6,6 +6,7 @@
 #
 # ==============================================================================
 
+
 import math
 import numpy as np
 import tensorflow as tf
@@ -47,13 +48,13 @@ def noise_validator(noise, allowed_noises):
             return True
         elif noise.split('-')[0] == 'mask' and float(noise.split('-')[1]):
             t = float(noise.split('-')[1])
-
-        if t >= 0.0 and t <= 1.0:
-            return True
-        else:
-            return False
+            if t >= 0.0 and t <= 1.0:
+                return True
+            else:
+                return False
     except:
         return False
+    pass
 
 
 def sigmoid_normalize(value_list):
@@ -64,11 +65,11 @@ def sigmoid_normalize(value_list):
     return alist
 
 
-def swish(logit, name=None):
+def swish(logit,  name=None):
     with tf.name_scope(name):
         l = tf.multiply(logit, tf.nn.sigmoid(logit))
 
-    return l
+        return l
 
 
 def generate_samples(dim, num_inlier, num_outlier, normalize=True):
@@ -83,7 +84,7 @@ def generate_samples(dim, num_inlier, num_outlier, normalize=True):
             values = sigmoid_normalize(values)
             sample_inlier.append(values)
 
-            inlier = np.array(sample_inlier).transpose()
+        inlier = np.array(sample_inlier).transpose()
 
     outlier = np.random.normal(1.0, 1.0, [num_outlier, dim])
 
@@ -99,3 +100,19 @@ def generate_samples(dim, num_inlier, num_outlier, normalize=True):
         outlier = np.array(sample_outlier).transpose()
 
     return inlier, outlier
+
+
+def add_gaussian_noise(input_layer, mean, std, truncate=True):
+    if std < 0.0:
+        return input_layer
+
+    if truncate:
+        noise = tf.truncated_normal(shape=tf.shape(input_layer), mean=mean, stddev=std, dtype=tf.float32)
+    else:
+        noise = tf.random_normal(shape=tf.shape(input_layer), mean=mean, stddev=std, dtype=tf.float32)
+
+    return input_layer + noise
+
+
+def add_uniform_noise(input_layer, min_val, max_val):
+    return input_layer + tf.random_uniform(shape=tf.shape(input_layer), minval=min_val, maxval=max_val)
