@@ -427,9 +427,9 @@ def get_residual_loss(value, target, type='l1', gamma=1.0):
         eps = 1e-10
         loss = tf.reduce_mean(-1 * target * tf.log(value + eps) - 1 * (1 - target) * tf.log(1 - value + eps))
     elif type == 'l1':
-        loss = tf.reduce_mean(tf.reduce_sum(tf.abs(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -443,7 +443,7 @@ def get_feature_matching_loss(value, target, type='l1', gamma=1.0):
     elif type == 'l1':
         loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -457,7 +457,7 @@ def get_conceptual_loss(value, target, type='l1', gamma=1.0):
     elif type == 'l1':
         loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -703,16 +703,17 @@ if __name__ == '__main__':
 
         for i in range(10):
             _, data_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, 1)
+            scale = len(data_seq[0]) * len(data_seq[0][0])
 
             recon_loss = test(data_seq, 20)
-            score = recon_loss
+            score = scale * recon_loss
             print('Test {0}, Inlier Anomaly Score: {1}'.format(i, score))
 
             # Noise injection [1, 20, 150]
             data_seq[0][5] = data_seq[0][5] + np.random.normal(loc=0.0, scale=1.0, size=data_seq[0][0].shape)
 
             recon_loss = test(data_seq, 20)
-            score = recon_loss
+            score = scale * recon_loss
             print('Test {0}, Outlier Anomaly Score: {1}'.format(i, score))
             print()
     else:

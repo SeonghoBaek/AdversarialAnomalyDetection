@@ -396,9 +396,9 @@ def get_residual_loss(value, target, type='l1', gamma=1.0):
         eps = 1e-10
         loss = tf.reduce_mean(-1 * target * tf.log(value + eps) - 1 * (1 - target) * tf.log(1 - value + eps))
     elif type == 'l1':
-        loss = tf.reduce_sum(tf.abs(tf.subtract(target, value)))
+        loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -412,7 +412,7 @@ def get_feature_matching_loss(value, target, type='l1', gamma=1.0):
     elif type == 'l1':
         loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -425,9 +425,9 @@ def get_conceptual_loss(value, target, type='l1', gamma=1.0):
         # loss = -tf.reduce_mean(x_ * tf.log(decoded + eps))
         loss = tf.reduce_mean(-1 * target * tf.log(value + eps) - 1 * (1 - target) * tf.log(1 - value + eps))
     elif type == 'l1':
-        loss = tf.reduce_sum(tf.abs(tf.subtract(target, value)))
+        loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -681,16 +681,16 @@ if __name__ == '__main__':
     elif args.test:
         for i in range(10):
             data_x, data_seq = util.get_sequence_batch(inlier_sample, lstm_sequence_length, 1)
-
+            scale = len(data_x[0])
             recon_loss, concept_loss = test(data_x, data_seq, 20)
-            score = 10 * (recon_loss + concept_loss)
+            score = scale * (recon_loss + concept_loss)
             print('Inlier Anomaly Score:', score, ', reconstruction loss:', recon_loss, ', conceptual loss:',
                   concept_loss)
 
             out_x = data_x + np.random.normal(loc=0.0, scale=0.1, size=data_x.shape)
 
             recon_loss, concept_loss = test(out_x, data_seq, 20)
-            score = 10 * (recon_loss + concept_loss)
+            score = scale * (recon_loss + concept_loss)
             print('Outlier Anomaly Score:', score, ', reconstruction loss:', recon_loss, ', conceptual loss:', concept_loss)
 
             print()

@@ -405,9 +405,9 @@ def get_residual_loss(value, target, type='l1', gamma=1.0):
         eps = 1e-10
         loss = tf.reduce_mean(-1 * target * tf.log(value + eps) - 1 * (1 - target) * tf.log(1 - value + eps))
     elif type == 'l1':
-        loss = tf.reduce_mean(tf.reduce_sum(tf.abs(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -421,7 +421,7 @@ def get_feature_matching_loss(value, target, type='l1', gamma=1.0):
     elif type == 'l1':
         loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -435,7 +435,7 @@ def get_conceptual_loss(value, target, type='l1', gamma=1.0):
     elif type == 'l1':
         loss = tf.reduce_mean(tf.abs(tf.subtract(target, value)))
     elif type == 'l2':
-        loss = tf.sqrt(tf.reduce_mean(tf.square(tf.subtract(target, value))))
+        loss = tf.reduce_mean(tf.square(tf.subtract(target, value)))
 
     return gamma * loss
 
@@ -664,13 +664,14 @@ if __name__ == '__main__':
 
         for i in range(10):
             _, data_seq = util.get_sequence_batch(inlier_sample, g_sequence_length, 1)
+            scale = len(data_seq[0]) * len(data_seq[0][0])
 
             for j in range(num_seed):
                 recon_loss = test(data_seq, num_itr, seed)
                 score_list.append(recon_loss)
                 seed = seed + 1
 
-            score = np.mean(score_list)
+            score = scale * np.mean(score_list)
             print('Test {0}, Inlier Anomaly Score: {1}'.format(i, score))
 
             score_list = []
@@ -684,7 +685,7 @@ if __name__ == '__main__':
                 score_list.append(recon_loss)
                 seed = seed + 1
 
-            score = np.mean(score_list)
+            score = scale * np.mean(score_list)
 
             print('Test {0}, Outlier Anomaly Score: {1}'.format(i, score))
             print()
